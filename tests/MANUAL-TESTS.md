@@ -54,6 +54,8 @@ For each device in the table above:
 - [ ] Once armed, local keyboard input goes to the host and **not** to Windows
 - [ ] Mouse movement is redirected too, not just the keyboard
 - [ ] `Ctrl+D+C` switches to the next host; the switch is visible in the log
+- [ ] `Ctrl+Alt+CapsLock` cycles the same targets without toggling Caps Lock on either device
+- [ ] Holding Caps Lock in the new chord cycles only once; releasing and pressing it cycles again
 - [ ] `Ctrl+Alt+Q` ends the session and returns input to the PC
 - [ ] After `Ctrl+Alt+Q`, the local keyboard works normally again
 
@@ -63,6 +65,8 @@ For each device in the table above:
 - [ ] `Ctrl+Alt+Q` un-ticks the capture toggle (hotkey and UI stay in sync)
 - [ ] Selecting a target in the UI actually changes where input goes
 - [ ] `Ctrl+D+C` updates the UI's selected radio button
+- [ ] `Ctrl+Alt+CapsLock` updates the selected target, including from **This PC**
+- [ ] Switching away from **This PC** with `Ctrl+Alt+CapsLock` and back with `Ctrl+D+C` leaves neither Alt nor Ctrl pressed locally
 - [ ] Selecting **This PC** keeps capture armed but returns input locally
 - [ ] A host that drops while selected shows "no longer subscribed" rather than silently failing
 - [ ] Disconnecting the selected host immediately returns keyboard and mouse input to this PC

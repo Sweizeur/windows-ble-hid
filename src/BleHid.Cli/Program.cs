@@ -51,7 +51,7 @@ Console.WriteLine($"""
       move <dx> <dy>       move the pointer
       click <l|r|m>        click a mouse button
       scroll <n>           scroll wheel
-      capture              redirect local keyboard+mouse (Ctrl+D+C switch host, Ctrl+Alt+Q stop)
+      capture              redirect local keyboard+mouse (Ctrl+Alt+Q stops)
       capture verbose      same, with per-report timing diagnostics
       capture <ms>         same, with a custom pointer report interval
       host                 list subscribed hosts and the current target
@@ -66,8 +66,11 @@ Console.WriteLine($"""
       classic <on|off>     toggle BR/EDR connectable (fails with E_INVALIDARG on this stack)
       quit                 exit
 
+    While capturing:
+      Ctrl+Alt+CapsLock     switch target (Ctrl+D+C also works)
+
     Background mode (keeps hosts bonded across restarts):
-      --background         run detached, no console; Ctrl+D+C switches target
+      --background         run detached, no console; same capture shortcuts
       --stop               stop the background instance
       --install-autostart  run at login   --remove-autostart  undo
 

@@ -73,7 +73,7 @@ paired device instead of this PC.
 | While capturing | |
 | --- | --- |
 | `Ctrl` + `Alt` + `Q` | Stop and return control to this PC |
-| `Ctrl` + `D` + `C` | Switch which device you are driving, including back to this PC |
+| `Ctrl` + `Alt` + `CapsLock` or `Ctrl` + `D` + `C` | Switch which device you are driving, including back to this PC |
 
 Everything else in the app is either scripted input (`type`, `move`) or diagnostics.
 
@@ -138,12 +138,12 @@ pick a host. From there it is hotkeys only — there is no console to type into:
 
 | Hotkey | Action |
 | --- | --- |
-| `Ctrl` + `D` + `C` | Switch target: this PC → host 1 → … → host N → this PC |
+| `Ctrl` + `Alt` + `CapsLock` or `Ctrl` + `D` + `C` | Switch target: this PC → host 1 → … → host N → this PC |
 | `Ctrl` + `Alt` + `Q` | Return input to this PC (does **not** exit — use `--stop`) |
 
 If the selected host disconnects, capture automatically returns input to this PC instead
 of continuing to swallow it. Reconnecting the host does not retarget it automatically;
-use `Ctrl` + `D` + `C` when you are ready to switch back.
+use `Ctrl` + `Alt` + `CapsLock` (or `Ctrl` + `D` + `C`) when you are ready to switch back.
 
 Only one instance runs at a time; a second `--background` is refused. Output goes to
 `%LOCALAPPDATA%\BleHid\logs\blehid.log`.
@@ -210,11 +210,14 @@ rebuilding, or the build fails with `MSB3026`.
 
 | Hotkey | Action |
 | --- | --- |
-| `Ctrl` + `D` + `C` | Switch target: this PC → host 1 → … → host N → this PC |
+| `Ctrl` + `Alt` + `CapsLock` or `Ctrl` + `D` + `C` | Switch target: this PC → host 1 → … → host N → this PC |
 | `Ctrl` + `Alt` + `Q` | Stop capturing |
 
 When the target is **this PC**, input passes through untouched so you can use your own
 machine normally. The hotkeys stay live in that mode.
+
+`Ctrl` + `Alt` + `CapsLock` cycles once per Caps Lock press without toggling Caps Lock
+locally or on the host. Ordinary Caps Lock presses are unchanged.
 
 ### Scripted input
 
@@ -392,9 +395,9 @@ If it still reports the scaled size, `SetProcessDpiAwarenessContext` is not taki
 
 ### The switch hotkey leaks one keypress
 
-Whichever of `D` or `C` you press first reaches the current target before the combination
-completes. Press `D` first — `Ctrl`+`D` is harmless in most applications, whereas
-`Ctrl`+`C` would copy.
+With the original `Ctrl`+`D`+`C` hotkey, whichever of `D` or `C` you press first reaches
+the current target before the combination completes. This can activate a host shortcut.
+Use `Ctrl`+`Alt`+`CapsLock` instead; the Caps Lock events are consumed by BleHid.
 
 At the `>` prompt — that is, when *not* capturing — `Ctrl`+`D` is console EOF and exits the
 app. The hotkey only means "switch host" while capture is running.

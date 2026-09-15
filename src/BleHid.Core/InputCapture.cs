@@ -27,6 +27,7 @@ public sealed class InputCapture : IDisposable
 
     private readonly HashSet<byte> _pressedUsages = [];
     private readonly HashSet<int> _pressedVirtualKeys = [];
+    private readonly HashSet<int> _localPressedVirtualKeys = [];
     private LowLevelProc? _keyboardProc;
     private LowLevelProc? _mouseProc;
     private WinEventProc? _winEventProc;
@@ -37,6 +38,7 @@ public sealed class InputCapture : IDisposable
     private int _centerX, _centerY;
     private int _keyboardEvents, _mouseEvents, _rearms;
     private bool _switchLatched;
+    private bool _capsLockSwitchLatched;
     private volatile bool _passThrough;
     private volatile bool _running;
 
@@ -163,10 +165,34 @@ public sealed class InputCapture : IDisposable
         var message = (int)wParam;
         var isDown = message is WM_KEYDOWN or WM_SYSKEYDOWN;
         var virtualKey = (int)data.vkCode;
+        return HandleKeyboardEvent(virtualKey, isDown)
+            ? (IntPtr)1
+            : CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+    }
+
+    internal bool HandleKeyboardEvent(int virtualKey, bool isDown)
+    {
         _keyboardEvents++;
+        var releaseLocally = !isDown && _localPressedVirtualKeys.Remove(virtualKey);
 
         if (isDown) _pressedVirtualKeys.Add(virtualKey);
         else _pressedVirtualKeys.Remove(virtualKey);
+
+        if (virtualKey == 0x14)
+        {
+            if (_capsLockSwitchLatched)
+            {
+                if (!isDown) _capsLockSwitchLatched = false;
+                return !releaseLocally;
+            }
+
+            if (isDown && IsDown(0x11) && IsDown(0x12))
+            {
+                _capsLockSwitchLatched = true;
+                RequestHostSwitch();
+                return true;
+            }
+        }
 
         if (isDown && virtualKey == 0x51 && IsDown(0x11) && IsDown(0x12)) // Ctrl+Alt+Q
         {
@@ -174,7 +200,7 @@ public sealed class InputCapture : IDisposable
             _pressedVirtualKeys.Clear();
             KeyboardReport?.Invoke(KeyModifiers.None, []);
             StopRequested?.Invoke();
-            return 1;
+            return true;
         }
 
         // Ctrl+D+C switches host. Latched so key auto-repeat cannot cycle past the target.
@@ -184,15 +210,17 @@ public sealed class InputCapture : IDisposable
             if (!_switchLatched)
             {
                 _switchLatched = true;
-                _pressedUsages.Clear();
-                KeyboardReport?.Invoke(KeyModifiers.None, []);
-                SwitchHostRequested?.Invoke();
+                RequestHostSwitch();
             }
-            return 1;
+            return true;
         }
 
         // Hotkeys stay live in pass-through, but nothing else is captured or swallowed.
-        if (_passThrough) return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+        if (_passThrough)
+        {
+            if (isDown) _localPressedVirtualKeys.Add(virtualKey);
+            return false;
+        }
 
         if (VirtualKeyMap.TryGetUsage(virtualKey, out var usage))
         {
@@ -206,7 +234,14 @@ public sealed class InputCapture : IDisposable
             Log?.Invoke($"  [key] vk=0x{virtualKey:x2} {(isDown ? "down" : "up")} -> mod=0x{(byte)modifiers:x2} usages=[{string.Join(" ", usages.Select(u => u.ToString("x2")))}]");
 
         KeyboardReport?.Invoke(modifiers, usages);
-        return 1; // swallow locally
+        return !releaseLocally;
+    }
+
+    private void RequestHostSwitch()
+    {
+        _pressedUsages.Clear();
+        KeyboardReport?.Invoke(KeyModifiers.None, []);
+        SwitchHostRequested?.Invoke();
     }
 
     private IntPtr MouseHookProc(int code, IntPtr wParam, IntPtr lParam)

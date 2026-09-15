@@ -187,9 +187,10 @@ public static class CaptureSession
         {
             log($"  pointer report interval: {PointerIntervalMs()} ms");
             log($"  sending to: {peripheral.SelectedHostDisplay}");
+            log("  Ctrl+Alt+CapsLock or Ctrl+D+C switches target.");
             log(stopEndsSession
-                ? "  capturing - Ctrl+D+C switches target, Ctrl+Alt+Q stops."
-                : "  capturing - Ctrl+D+C switches target, Ctrl+Alt+Q returns input to this PC.");
+                ? "  capturing - Ctrl+Alt+Q stops."
+                : "  capturing - Ctrl+Alt+Q returns input to this PC.");
 
             capture.Start();
             await stopped.Task;
