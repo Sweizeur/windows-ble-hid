@@ -131,10 +131,14 @@ possibly stalled `NotifyValueAsync` call to a vanished host.
 The app exposes one composite HID service:
 
 - Keyboard input: Report ID 1
+- Keyboard LED output: Report ID 1, Output — written by the host, carries Caps/Num/Scroll state
 - Mouse input: Report ID 2
 - HID Information flags: `RemoteWake | NormallyConnectable`
-- Report Map: 113 bytes
+- Report Map: 135 bytes
 - Battery Service: `0x180F`
+
+The LED output report is the only channel carrying information *back* from the host. A HID
+keyboard is otherwise write-only, so lock-key state would be unknowable without it.
 
 On the tested Windows build, system services occupy the handles before HOGP. The measured
 layout was:
@@ -153,6 +157,62 @@ layout was:
 
 Two discovery-only dumps across provider restarts produced the same handles and Database
 Hash. Handle instability is not the reconnect bug.
+
+Handles above predate the LED output report, so they have shifted; the relationship they
+illustrate has not.
+
+## Lock key state
+
+Caps Lock and Num Lock belong to the host, not the keyboard: we send a usage and the host
+decides what it means. Two sources, in order of preference:
+
+1. **Measured** — the host writes the LED output report. Authoritative and self-correcting.
+2. **Inferred** — count the lock usages forwarded to that host and assume it started clear.
+   Used only until a host writes an LED report; a host whose GATT database is cached may
+   never write one.
+
+Inference is deliberately suppressed once a host is measured. Guessing alongside a known
+good signal only makes the display flicker, and is wrong whenever the host declines to act
+on the key.
+
+State is per host and is dropped on disconnect, because the host can change it while we are
+not attached. The LED read handler answers per session for the same reason: one shared value
+would hand whichever host asked the lamp state of whichever wrote last.
+
+Only states that silently corrupt input are surfaced — Caps Lock on, and Num Lock off *after
+the numpad has been used on that host*. Hosts without a Num Lock key report it permanently
+off, so an unprompted warning there would never clear.
+
+Verified on the Android 16 reference phone, which writes an LED report within seconds of
+connecting. Not yet verified on macOS, Windows or iOS hosts; those fall back to inference,
+which degrades quietly rather than failing.
+
+The bookkeeping lives in `HostLockState`, deliberately separate from the GATT plumbing so
+the rules are testable without a Bluetooth stack.
+
+## Keypad keys are resolved physically
+
+Windows applies the local Num Lock before the hook sees the key: with Num Lock off, keypad 1
+arrives as `VK_END`. A real keyboard has no Num Lock state of its own — it reports the
+physical key and lets the host apply its own setting — so resolving by virtual key would let
+*this* PC silently decide what the remote receives, and the remote would then apply its own
+on top.
+
+`KeyboardHookProc` therefore passes `scanCode` and the extended flag into
+`HandleKeyboardEvent`. The numpad and the navigation cluster share scan codes and differ only
+by that flag:
+
+| Scan code | Not extended | Extended |
+| --- | --- | --- |
+| `0x47` | Keypad 7 | Home |
+| `0x4F` | Keypad 1 | End |
+| `0x52` | Keypad 0 | Insert |
+| `0x53` | Keypad . | Delete |
+| `0x1C` | Enter | Keypad Enter |
+
+Num Lock itself, and the keypad operators, are unambiguous by virtual key and stay in the
+virtual-key map. The virtual-key map also remains the fallback for injected input, which can
+arrive with no scan code.
 
 ## Android provider-restart reconnect root cause
 

@@ -3,6 +3,55 @@ namespace BleHid.Core;
 /// <summary>Maps Windows virtual-key codes to HID keyboard usage IDs.</summary>
 public static class VirtualKeyMap
 {
+    /// <summary>
+    /// Resolves a key from its physical identity rather than the virtual-key code Windows
+    /// derived from it. A real keyboard has no Num Lock state of its own: it always reports the
+    /// physical key and lets the host apply its own Num Lock. Windows resolves Num Lock for us
+    /// first, so without this the local machine would silently decide what the remote receives.
+    /// </summary>
+    public static bool TryGetUsage(int virtualKey, uint scanCode, bool extended, out byte usage)
+    {
+        if (TryGetNumpadUsage(scanCode, extended, out usage)) return true;
+
+        // Keypad Enter shares VK_RETURN with the main Enter; only the extended flag tells them
+        // apart, and some hosts bind them separately.
+        if (virtualKey == 0x0D && extended)
+        {
+            usage = 0x58; // Keypad Enter
+            return true;
+        }
+
+        return TryGetUsage(virtualKey, out usage);
+    }
+
+    /// <summary>
+    /// The numpad keys whose virtual-key code changes with Num Lock. The navigation cluster
+    /// shares their scan codes and is told apart only by the extended flag, so an extended key
+    /// here is Home/End/arrows and never the numpad.
+    /// </summary>
+    private static bool TryGetNumpadUsage(uint scanCode, bool extended, out byte usage)
+    {
+        usage = 0;
+        if (extended) return false;
+
+        usage = scanCode switch
+        {
+            0x47 => (byte)0x5F, // Keypad 7
+            0x48 => (byte)0x60, // Keypad 8
+            0x49 => (byte)0x61, // Keypad 9
+            0x4B => (byte)0x5C, // Keypad 4
+            0x4C => (byte)0x5D, // Keypad 5
+            0x4D => (byte)0x5E, // Keypad 6
+            0x4F => (byte)0x59, // Keypad 1
+            0x50 => (byte)0x5A, // Keypad 2
+            0x51 => (byte)0x5B, // Keypad 3
+            0x52 => (byte)0x62, // Keypad 0
+            0x53 => (byte)0x63, // Keypad .
+            _ => (byte)0
+        };
+        return usage != 0;
+    }
+
     public static bool TryGetUsage(int virtualKey, out byte usage)
     {
         switch (virtualKey)
@@ -16,6 +65,9 @@ public static class VirtualKeyMap
             case 0x30: usage = 0x27; return true; // 0
             case >= 0x70 and <= 0x7B: // F1-F12
                 usage = (byte)(0x3A + (virtualKey - 0x70));
+                return true;
+            case >= 0x61 and <= 0x69: // Numpad 1-9 (Windows sends these only with Num Lock on)
+                usage = (byte)(0x59 + (virtualKey - 0x61));
                 return true;
         }
 
@@ -51,6 +103,13 @@ public static class VirtualKeyMap
             0x25 => 0x50, // Left
             0x28 => 0x51, // Down
             0x26 => 0x52, // Up
+            0x90 => 0x53, // Num Lock
+            0x6F => 0x54, // Numpad /
+            0x6A => 0x55, // Numpad *
+            0x6D => 0x56, // Numpad -
+            0x6B => 0x57, // Numpad +
+            0x60 => 0x62, // Numpad 0
+            0x6E => 0x63, // Numpad .
             _ => 0
         };
 

@@ -26,6 +26,9 @@ public sealed class BleHidPeripheral : IAsyncDisposable
     private readonly ConcurrentDictionary<string, string> _hostNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, BluetoothLEDevice> _hostDevices = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, int> _connectionIntervalsMs = new(StringComparer.OrdinalIgnoreCase);
+    // Caps Lock is lock state owned by the host: we send the keycode, the host decides what it
+    // means, and HID gives it no way to tell us the result unless it reports its lamps.
+    private readonly HostLockState _lockState = new();
     private readonly SemaphoreSlim _connectionParameterGate = new(1, 1);
     private readonly PointerPacingOverrides _pointerPacing =
         PointerPacingOverrides.Load(AppPaths.InRoot("pointer-pacing.json"));
@@ -41,6 +44,12 @@ public sealed class BleHidPeripheral : IAsyncDisposable
     private GattLocalCharacteristic? _mouseInput;
     private byte[] _lastKeyboardReport = new byte[HidReports.KeyboardReportLength];
     private byte[] _lastMouseReport = new byte[HidReports.MouseReportLength];
+    private const byte CapsLockUsage = 0x39;
+    private const byte NumLockUsage = 0x53;
+    // Keypad / through Keypad . - the keys whose meaning Num Lock actually changes.
+    private const byte NumpadFirstUsage = 0x54;
+    private const byte NumpadLastUsage = 0x63;
+
     private byte _protocolMode = 0x01; // 0x00 = boot, 0x01 = report
 
     [SupportedOSPlatformGuard("windows10.0.22000.0")]
@@ -99,6 +108,9 @@ public sealed class BleHidPeripheral : IAsyncDisposable
     /// <summary>Raised on every target change so a running capture can re-evaluate pass-through.</summary>
     public event Action? TargetChanged;
 
+    /// <summary>Raised when a host reports new lock-lamp state.</summary>
+    public event Action? CapsLockChanged;
+
     /// <summary>HOGP mandates encryption, but hosts differ in how they bond with a Windows peripheral.</summary>
     public BleHidPeripheral(bool requireEncryption = true) =>
         _protection = requireEncryption
@@ -143,6 +155,11 @@ public sealed class BleHidPeripheral : IAsyncDisposable
 
         _keyboardInput = await CreateInputReportAsync("Keyboard input report", service,
             HidDescriptors.KeyboardReportId, () => _lastKeyboardReport);
+
+        // Carries the host's lock lamps back to us, which is the only feedback a standard HID
+        // keyboard gets. Hosts bonded before this existed keep a cached GATT database and will
+        // never write it, so caps lock stays inferred for them until they re-pair.
+        await CreateOutputReportAsync(service, HidDescriptors.KeyboardReportId);
 
         _mouseInput = await CreateInputReportAsync("Mouse input report", service,
             HidDescriptors.MouseReportId, () => _lastMouseReport);
@@ -290,6 +307,73 @@ public sealed class BleHidPeripheral : IAsyncDisposable
         };
     }
 
+    private async Task CreateOutputReportAsync(GattLocalService service, byte reportId)
+    {
+        var parameters = new GattLocalCharacteristicParameters
+        {
+            CharacteristicProperties = GattCharacteristicProperties.Read |
+                                       GattCharacteristicProperties.Write |
+                                       GattCharacteristicProperties.WriteWithoutResponse,
+            ReadProtectionLevel = _protection,
+            WriteProtectionLevel = _protection
+        };
+
+        var result = await service.CreateCharacteristicAsync(HidDescriptors.Report, parameters);
+        Record("Keyboard LED output report", result.Error.ToString(), result.Error == BluetoothError.Success);
+        if (result.Error != BluetoothError.Success) return;
+
+        var characteristic = result.Characteristic;
+
+        characteristic.ReadRequested += async (_, args) =>
+        {
+            using var deferral = args.GetDeferral();
+            var request = await args.GetRequestAsync();
+            // Answer per session. Lock state belongs to one host, so serving a single shared
+            // byte would hand whichever host asked the lamp state of whichever wrote last.
+            var leds = (byte)LockKeysFor(args.Session.DeviceId.Id);
+            request.RespondWithValue(CryptographicBuffer.CreateFromByteArray([leds]));
+        };
+
+        characteristic.WriteRequested += async (_, args) =>
+        {
+            using var deferral = args.GetDeferral();
+            var request = await args.GetRequestAsync();
+            var value = ReadBytes(request.Value);
+            if (value.Length > 0) NoteLedReport(args.Session.DeviceId.Id, value[0]);
+            if (request.Option == GattWriteOption.WriteWithResponse) request.Respond();
+        };
+
+        var descriptorParameters = new GattLocalDescriptorParameters
+        {
+            ReadProtectionLevel = _protection,
+            StaticValue = CryptographicBuffer.CreateFromByteArray([reportId, HidDescriptors.ReportTypeOutput])
+        };
+
+        var descriptorResult = await characteristic.CreateDescriptorAsync(
+            HidDescriptors.ReportReference, descriptorParameters);
+
+        Record("Keyboard LED output report / Report Reference 0x2908",
+            $"{descriptorResult.Error} (id={reportId}, type=Output)",
+            descriptorResult.Error == BluetoothError.Success);
+    }
+
+    /// <summary>
+    /// The host told us what its lock lamps are doing. This is measurement rather than inference,
+    /// so it overrides whatever the forwarded-keystroke count believed.
+    /// </summary>
+    private void NoteLedReport(string deviceId, byte leds)
+    {
+        var (firstReport, changed, state) = _lockState.NoteLedReport(deviceId, leds);
+
+        if (firstReport)
+            Log?.Invoke($"[hid ] LED reports available from {ShortAddress(deviceId)} - lock keys are now measured, not inferred");
+        if (!changed) return;
+
+        Log?.Invoke($"[hid ] {ShortAddress(deviceId)} locks -> caps {(state.HasFlag(LockKeys.CapsLock) ? "on" : "off")}, num {(state.HasFlag(LockKeys.NumLock) ? "on" : "off")}");
+        // Hosts re-assert their lamps periodically, so only a real change is worth waking the UI.
+        CapsLockChanged?.Invoke();
+    }
+
     private async Task<GattLocalCharacteristic?> CreateInputReportAsync(string name,
         GattLocalService service, byte reportId, Func<byte[]> currentValue)
     {
@@ -375,6 +459,10 @@ public sealed class BleHidPeripheral : IAsyncDisposable
         Log?.Invoke($"[link] connection status -> {sender.ConnectionStatus}");
         if (sender.ConnectionStatus != BluetoothConnectionStatus.Disconnected) return;
 
+        // The host owns its lock state and can change it while we are not attached, so a
+        // reconnect starts from the default rather than carrying a stale belief forward.
+        _lockState.Forget(sender.DeviceId);
+
         ReturnLocalIfTargetUnavailable(
             _hostDevices
                 .Where(pair => pair.Value.ConnectionStatus == BluetoothConnectionStatus.Connected)
@@ -402,8 +490,113 @@ public sealed class BleHidPeripheral : IAsyncDisposable
 
     public Task SendKeyboardAsync(KeyModifiers modifiers, params byte[] usages)
     {
-        _lastKeyboardReport = HidReports.Keyboard(modifiers, usages);
-        return NotifyAsync(_keyboardInput, _lastKeyboardReport);
+        var report = HidReports.Keyboard(modifiers, usages);
+        // Only the rising edge counts. Auto-repeat keeps the usage present across many reports,
+        // but the host toggles the lock once, when the key first goes down.
+        var pressed = LockKeysIn(report) & ~LockKeysIn(_lastKeyboardReport);
+        if (pressed != LockKeys.None) NoteLockKeysForwarded(pressed);
+        if (ReportHasNumpadKey(report)) NoteNumpadUsed();
+        _lastKeyboardReport = report;
+        return NotifyAsync(_keyboardInput, report);
+    }
+
+    /// <summary>
+    /// Lock-key state of the given host. Measured when the host writes LED reports, otherwise
+    /// inferred from the presses we forwarded - see <see cref="LockKeysMeasured"/>.
+    /// </summary>
+    public LockKeys LockKeysFor(string deviceId) => _lockState.For(deviceId);
+
+    /// <summary>
+    /// True when the host has written an LED report, so its lock state is measured rather than
+    /// inferred. A host bonded before the LED report existed may never write one.
+    /// </summary>
+    public bool LockKeysMeasured(string deviceId) => _lockState.Measured(deviceId);
+
+    /// <summary>Lock-key state of the host currently receiving input.</summary>
+    public LockKeys TargetLockKeys => _localOnly
+        ? LockKeys.None
+        : TargetedHosts().Aggregate(LockKeys.None, (all, host) => all | LockKeysFor(host.DeviceId));
+
+    /// <summary>True when every host currently targeted reports its lock lamps to us.</summary>
+    public bool TargetLockKeysMeasured
+    {
+        get
+        {
+            var hosts = TargetedHosts();
+            return hosts.Count > 0 && hosts.All(host => LockKeysMeasured(host.DeviceId));
+        }
+    }
+
+    /// <summary>True when the host currently receiving input has Caps Lock on.</summary>
+    public bool TargetCapsLockOn => TargetLockKeys.HasFlag(LockKeys.CapsLock);
+
+    /// <summary>
+    /// Describes only the states that silently corrupt input: Caps Lock on changes case, and
+    /// Num Lock off turns numpad digits into cursor keys. Ordinary states say nothing.
+    /// </summary>
+    /// <param name="numpadUsed">
+    /// Whether the numpad has been used on this host. Num Lock off is reported only when it can
+    /// actually bite - many hosts report it permanently off (Apple keyboards have no Num Lock
+    /// key at all), and warning about that unprompted would be constant noise.
+    /// </param>
+    public static string? DescribeLockKeys(LockKeys keys, bool numpadUsed)
+    {
+        var caps = keys.HasFlag(LockKeys.CapsLock);
+        var numOff = numpadUsed && !keys.HasFlag(LockKeys.NumLock);
+        if (caps && numOff) return "CAPS LOCK ON, NUM LOCK OFF";
+        if (caps) return "CAPS LOCK ON";
+        return numOff ? "NUM LOCK OFF" : null;
+    }
+
+    /// <summary>True when the numpad has been used against the given host.</summary>
+    public bool NumpadUsed(string deviceId) => _lockState.NumpadUsed(deviceId);
+
+    /// <summary>
+    /// What is worth saying about the current target's lock keys, or null when nothing is.
+    /// </summary>
+    public string? TargetLockWarning => DescribeLockKeys(
+        TargetLockKeys,
+        !_localOnly && TargetedHosts().Any(host => NumpadUsed(host.DeviceId)));
+
+    /// <summary>The hosts a report would currently reach: the selected one, or all when broadcasting.</summary>
+    private List<HostTarget> TargetedHosts()
+    {
+        var target = _selectedHostId;
+        return Hosts()
+            .Where(host => target is null ||
+                           string.Equals(host.DeviceId, target, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private void NoteLockKeysForwarded(LockKeys pressed)
+    {
+        if (_localOnly) return;
+        foreach (var host in TargetedHosts()) _lockState.NoteForwarded(host.DeviceId, pressed);
+    }
+
+    private void NoteNumpadUsed()
+    {
+        if (_localOnly) return;
+        foreach (var host in TargetedHosts()) _lockState.NoteNumpadUsed(host.DeviceId);
+    }
+
+    private static bool ReportHasNumpadKey(byte[] report)
+    {
+        if (report.Length < HidReports.KeyboardReportLength) return false;
+        foreach (var usage in report.AsSpan(2))
+            if (usage is >= NumpadFirstUsage and <= NumpadLastUsage) return true;
+        return false;
+    }
+
+    // Report layout is [modifiers, reserved, up to six usages].
+    internal static LockKeys LockKeysIn(byte[] report)
+    {
+        if (report.Length < HidReports.KeyboardReportLength) return LockKeys.None;
+        var keys = report.AsSpan(2);
+        var found = LockKeys.None;
+        if (keys.Contains(CapsLockUsage)) found |= LockKeys.CapsLock;
+        if (keys.Contains(NumLockUsage)) found |= LockKeys.NumLock;
+        return found;
     }
 
     public Task ReleaseKeysAsync()

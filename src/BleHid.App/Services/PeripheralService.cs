@@ -84,6 +84,21 @@ public sealed class PeripheralService : INotifyPropertyChanged
     private string _target = "nothing yet";
     public string Target { get => _target; private set => Set(ref _target, value); }
 
+    private bool _targetCapsLockOn;
+
+    /// <summary>
+    /// Lock-key state of the host receiving input, measured from its LED reports where the host
+    /// sends them and inferred from forwarded keystrokes otherwise.
+    /// </summary>
+    public bool TargetCapsLockOn { get => _targetCapsLockOn; private set => Set(ref _targetCapsLockOn, value); }
+
+    private string? _targetLockWarning;
+
+    /// <summary>Null when nothing about the target's lock keys is worth saying.</summary>
+    public string? TargetLockWarning { get => _targetLockWarning; private set => Set(ref _targetLockWarning, value); }
+
+    public bool HasTargetLockWarning => TargetLockWarning is not null;
+
     /// <summary>Capture needs a subscribed host, so it stays disabled until one appears.</summary>
     public bool CanCapture => IsRunning && KeyboardSubscribers > 0;
 
@@ -96,7 +111,8 @@ public sealed class PeripheralService : INotifyPropertyChanged
             var peripheral = new BleHidPeripheral(RequireEncryption);
             peripheral.Log += Append;
             peripheral.TargetChanged += OnTargetChanged;
-            await peripheral.StartAsync();
+            peripheral.CapsLockChanged += OnCapsLockChanged;
+            await Task.Run(peripheral.StartAsync);
             _peripheral = peripheral;
             IsRunning = true;
             // Without this the peripheral starts in broadcast mode and every report is duplicated
@@ -339,6 +355,23 @@ public sealed class PeripheralService : INotifyPropertyChanged
         }
 
         Target = _peripheral.SelectedHostDisplay;
+        TargetCapsLockOn = _peripheral.TargetCapsLockOn;
+        SetLockWarning(_peripheral.TargetLockWarning);
+    }
+
+    private void SetLockWarning(string? warning)
+    {
+        if (TargetLockWarning == warning) return;
+        TargetLockWarning = warning;
+        OnPropertyChanged(nameof(HasTargetLockWarning));
+    }
+
+    // An LED report can arrive between polls, and a stale lock warning is worse than none.
+    private void OnCapsLockChanged()
+    {
+        if (_peripheral is null) return;
+        TargetCapsLockOn = _peripheral.TargetCapsLockOn;
+        SetLockWarning(_peripheral.TargetLockWarning);
     }
 
     private void RefreshCounters()

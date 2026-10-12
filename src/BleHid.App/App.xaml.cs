@@ -46,6 +46,15 @@ public partial class App : Application
 
         Tray = new TrayIconService(ShowMainWindow, ExitApplication);
 
+        // The tray is the only surface visible while the window is hidden, which is exactly when
+        // a lock left on a remote host would otherwise go unnoticed.
+        var peripheral = PeripheralService.Instance;
+        peripheral.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is not (nameof(peripheral.Target) or nameof(peripheral.TargetLockWarning))) return;
+            Dispatcher.Invoke(() => Tray?.UpdateStatus(peripheral.Target, peripheral.TargetLockWarning));
+        };
+
         var startHidden = e.Args.Contains(StartupService.TrayArgument, StringComparer.OrdinalIgnoreCase);
         MainWindow = new MainWindow();
         if (!startHidden) MainWindow.Show();

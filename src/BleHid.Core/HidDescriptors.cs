@@ -21,6 +21,12 @@ public static class HidDescriptors
     public const byte ReportTypeInput  = 1;
     public const byte ReportTypeOutput = 2;
 
+    /// <summary>Caps Lock is bit 1 of the LED output report (Num Lock is bit 0).</summary>
+    public const byte LedCapsLock = 0x02;
+
+    /// <summary>Mask of the LED bits this app tracks, so unknown lamps are ignored.</summary>
+    public const byte LedTrackedMask = 0x03;
+
     /// <summary>bcdHID 1.11, country code 0, flags = RemoteWake | NormallyConnectable.</summary>
     public static readonly byte[] HidInformationValue = [0x11, 0x01, 0x00, 0x03];
 
@@ -43,6 +49,23 @@ public static class HidDescriptors
         0x95, 0x01,       //   Report Count (1)
         0x75, 0x08,       //   Report Size (8)
         0x81, 0x01,       //   Input (Const)         - reserved byte
+        // LED output report. The host writes this to drive the lock lamps, which makes it the
+        // only channel on a standard HID keyboard that carries information back to us.
+        // Position matters: the boot-keyboard descriptor every host is written against puts the
+        // LED block here, between the reserved byte and the key array. Declaring it after the
+        // key array is legal but unusual, and the Android reference phone then wrote alternating
+        // lock states roughly twice a second.
+        0x15, 0x00,       //   Logical Minimum (0)
+        0x25, 0x01,       //   Logical Maximum (1)
+        0x95, 0x05,       //   Report Count (5)
+        0x75, 0x01,       //   Report Size (1)
+        0x05, 0x08,       //   Usage Page (LEDs)
+        0x19, 0x01,       //   Usage Minimum (Num Lock)
+        0x29, 0x05,       //   Usage Maximum (Kana)
+        0x91, 0x02,       //   Output (Data,Var,Abs) - 5 LED bits
+        0x95, 0x01,       //   Report Count (1)
+        0x75, 0x03,       //   Report Size (3)
+        0x91, 0x01,       //   Output (Const)        - pad to a whole byte
         0x95, 0x06,       //   Report Count (6)
         0x75, 0x08,       //   Report Size (8)
         0x15, 0x00,       //   Logical Minimum (0)

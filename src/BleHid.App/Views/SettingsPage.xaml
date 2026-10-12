@@ -52,6 +52,18 @@
       <ui:ToggleSwitch IsChecked="{Binding CloseToTray, Mode=TwoWay}" />
     </ui:CardControl>
 
+    <ui:CardControl Icon="{ui:SymbolIcon Cursor24}" Margin="0,0,0,8">
+      <ui:CardControl.Header>
+        <StackPanel>
+          <ui:TextBlock Text="Shake the pointer to switch target" FontTypography="BodyStrong" />
+          <ui:TextBlock FontTypography="Caption" TextWrapping="Wrap"
+                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                        Text="Move the mouse rapidly back and forth to cycle between this PC and the paired hosts. Ctrl+Alt+CapsLock always works too." />
+        </StackPanel>
+      </ui:CardControl.Header>
+      <ui:ToggleSwitch x:Name="SwitchGestureToggle" Click="OnSwitchGestureChanged" />
+    </ui:CardControl>
+
     <ui:CardControl Icon="{ui:SymbolIcon ArrowExit20}">
       <ui:CardControl.Header>
         <StackPanel>

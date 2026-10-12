@@ -56,6 +56,8 @@ Console.WriteLine($"""
       capture <ms>         same, with a custom pointer report interval
       host                 list subscribed hosts and the current target
       host <n|next|local|all>  choose the target; local keeps input on this PC
+      gesture              show whether shake-to-switch is on
+      gesture <on|off>     shake the pointer to switch target; applies to a running session
       status               show subscriber counts
       peers                list connected Bluetooth peers
       appearance           advertise GAP appearance = keyboard (no effect on this stack)
@@ -223,9 +225,42 @@ while (true)
                 for (var i = 0; i < hosts.Count; i++)
                 {
                     var marker = hosts[i].DeviceId == peripheral.SelectedHostId ? "*" : " ";
-                    Console.WriteLine($"  {marker} {i + 1}. {hosts[i].Display}");
+                    var locks = BleHidPeripheral.DescribeLockKeys(
+                        peripheral.LockKeysFor(hosts[i].DeviceId), peripheral.NumpadUsed(hosts[i].DeviceId));
+                    var note = locks is null
+                        ? string.Empty
+                        : peripheral.LockKeysMeasured(hosts[i].DeviceId) ? $"   {locks}" : $"   {locks} (inferred)";
+                    Console.WriteLine($"  {marker} {i + 1}. {hosts[i].Display}{note}");
                 }
                 if (hosts.Count == 0) Console.WriteLine("    (no subscribed hosts)");
+                break;
+            }
+
+            case "gesture":
+            {
+                var trimmed = argument.Trim();
+                // Reload rather than cache, so tuning edited in the file by hand survives a toggle.
+                var current = SwitchGestureOptions.Load(AppPaths.SwitchGestureConfig);
+
+                if (trimmed is "on" or "off")
+                {
+                    var updated = current.WithEnabled(trimmed == "on");
+                    if (!updated.TrySave(AppPaths.SwitchGestureConfig, out var error))
+                    {
+                        Console.WriteLine($"  could not save: {error}");
+                        break;
+                    }
+                    current = updated;
+                }
+                else if (trimmed.Length > 0)
+                {
+                    Console.WriteLine("  usage: gesture <on|off>");
+                    break;
+                }
+
+                Console.WriteLine($"  shake to switch: {(current.Enabled ? "on" : "off")}");
+                Console.WriteLine($"  {current.RequiredReversals} reversals of {current.MinStrokePx}px within {current.WindowMs}ms");
+                if (current.Warning is { } warning) Console.WriteLine($"  {warning}");
                 break;
             }
 
@@ -236,6 +271,10 @@ while (true)
                 Console.WriteLine($"  keyboard subs : {peripheral.SubscribedKeyboardClients}");
                 Console.WriteLine($"  mouse subs    : {peripheral.SubscribedMouseClients}");
                 Console.WriteLine($"  sending to    : {peripheral.SelectedHostDisplay}");
+                var lockKeys = peripheral.TargetLockKeys;
+                var lockSource = peripheral.TargetLockKeysMeasured ? "measured" : "inferred";
+                Console.WriteLine($"  caps lock     : {(lockKeys.HasFlag(LockKeys.CapsLock) ? "ON" : "off")} ({lockSource})");
+                Console.WriteLine($"  num lock      : {(lockKeys.HasFlag(LockKeys.NumLock) ? "on" : "OFF")} ({lockSource})");
 
                 // BR/EDR links are usually incidental (CDP/Phone Link, audio) and unrelated to HID.
                 var brEdrPeers = await BluetoothDiagnostics.ListConnectedClassicDevicesAsync();

@@ -42,6 +42,11 @@
                          Click="OnToggleCapture" />
       </ui:CardControl>
 
+      <ui:InfoBar Severity="Warning" IsClosable="False" Margin="0,0,0,16"
+                  Title="Lock keys on the target host"
+                  Message="{Binding TargetLockWarning, Mode=OneWay}"
+                  IsOpen="{Binding HasTargetLockWarning, Mode=OneWay}" />
+
       <ui:TextBlock Text="Send input to" FontTypography="Subtitle" Margin="0,0,0,8" />
 
       <ItemsControl ItemsSource="{Binding Targets}">

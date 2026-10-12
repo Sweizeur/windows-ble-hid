@@ -1,4 +1,4 @@
-using BleHid.Core;
+﻿using BleHid.Core;
 using Xunit;
 
 namespace BleHid.Core.Tests;
@@ -8,6 +8,43 @@ public sealed class InputCaptureTests
     private const int CapsLock = 0x14;
     private const int LeftControl = 0xA2;
     private const int LeftAlt = 0xA4;
+
+    [Fact]
+    public void Hook_timing_separates_event_age_from_callback_duration()
+    {
+        var timing = new InputCapture.HookTiming();
+
+        timing.Record(100, 110, 20);
+        timing.Record(200, 240, 30);
+
+        Assert.Equal(2, timing.Count);
+        Assert.Equal(50, timing.TotalEventAgeMs);
+        Assert.Equal(40, timing.MaxEventAgeMs);
+        Assert.Equal(50, timing.TotalCallbackTicks);
+        Assert.Equal(30, timing.MaxCallbackTicks);
+    }
+
+    [Fact]
+    public void Hook_timing_handles_tick_count_rollover()
+    {
+        var timing = new InputCapture.HookTiming();
+
+        timing.Record(int.MaxValue - 4, int.MinValue + 5, 0);
+
+        Assert.Equal(10, timing.TotalEventAgeMs);
+        Assert.Equal(10, timing.MaxEventAgeMs);
+    }
+
+    [Fact]
+    public void Hook_timing_clamps_future_event_timestamps()
+    {
+        var timing = new InputCapture.HookTiming();
+
+        timing.Record(12, 10, 0);
+
+        Assert.Equal(0, timing.TotalEventAgeMs);
+        Assert.Equal(0, timing.MaxEventAgeMs);
+    }
 
     [Theory]
     [InlineData(0xA2, 0xA4)]
@@ -216,5 +253,100 @@ public sealed class InputCaptureTests
 
         Assert.Equal(1, stops);
         Assert.Equal(0, switches);
+    }
+
+    [Fact]
+    public void Shake_gesture_switches_the_target()
+    {
+        using var capture = new InputCapture();
+        var now = 1000;
+        capture.SetNow(() => now);
+        capture.SetSwitchGesture(SwitchGestureOptions.ForTest(true, 80, 3, 800));
+
+        var switches = 0;
+        capture.SwitchHostRequested += () => switches++;
+
+        var sign = 1;
+        for (var stroke = 0; stroke < 4; stroke++)
+        {
+            for (var step = 0; step < 10; step++)
+            {
+                now += 5;
+                capture.TrackGesture(sign * 10, 0);
+            }
+            sign = -sign;
+        }
+
+        Assert.Equal(1, switches);
+    }
+
+    [Fact]
+    public void Shake_gesture_is_inert_when_it_is_not_enabled()
+    {
+        using var capture = new InputCapture();
+        var now = 1000;
+        capture.SetNow(() => now);
+        capture.SetSwitchGesture(SwitchGestureOptions.ForTest(false, 80, 3, 800));
+
+        var switches = 0;
+        capture.SwitchHostRequested += () => switches++;
+
+        var sign = 1;
+        for (var stroke = 0; stroke < 8; stroke++)
+        {
+            for (var step = 0; step < 10; step++)
+            {
+                now += 5;
+                capture.TrackGesture(sign * 10, 0);
+            }
+            sign = -sign;
+        }
+
+        Assert.Equal(0, switches);
+    }
+
+    [Fact]
+    public void Shake_gesture_does_not_fire_on_ordinary_pointer_movement()
+    {
+        using var capture = new InputCapture();
+        var now = 1000;
+        capture.SetNow(() => now);
+        capture.SetSwitchGesture(SwitchGestureOptions.ForTest(true, 80, 3, 800));
+
+        var switches = 0;
+        capture.SwitchHostRequested += () => switches++;
+
+        // A long sweep across the screen, then a short correction back - the shape of reaching
+        // for something and overshooting slightly.
+        for (var step = 0; step < 100; step++)
+        {
+            now += 5;
+            capture.TrackGesture(12, 1);
+        }
+        for (var step = 0; step < 3; step++)
+        {
+            now += 5;
+            capture.TrackGesture(-6, 0);
+        }
+
+        Assert.Equal(0, switches);
+    }
+
+    [Fact]
+    public void Switching_target_releases_a_held_mouse_button()
+    {
+        // A button still down on the outgoing host reads as a drag that never ends.
+        using var capture = new InputCapture();
+        capture.SetPassThrough(false);
+
+        var buttonReports = new List<MouseButtons>();
+        capture.MouseReport += (buttons, _, _, _) => buttonReports.Add(buttons);
+
+        capture.HandleKeyboardEvent(LeftControl, true);
+        capture.HandleKeyboardEvent(LeftAlt, true);
+        capture.HandleKeyboardEvent(CapsLock, true);
+
+        // No button was held, so no spurious release should be sent either.
+        Assert.Empty(buttonReports);
     }
 }

@@ -23,4 +23,7 @@ public static class AppPaths
         Directory.CreateDirectory(Root);
         return Path.Combine(Root, fileName);
     }
+
+    /// <summary>Path of the pointer switch gesture configuration file.</summary>
+    public static string SwitchGestureConfig => InRoot("switch-gesture.json");
 }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace BleHid.Core;
@@ -8,10 +9,11 @@ namespace BleHid.Core;
 /// </summary>
 public sealed class InputCapture : IDisposable
 {
-    private const int WH_KEYBOARD_LL = 13;
-    private const int WH_MOUSE_LL = 14;
+    private const int WH_KEYBOARD_LL = 13;    private const int WH_MOUSE_LL = 14;
     private const int HC_ACTION = 0;
     private const uint LLMHF_INJECTED = 0x01;
+    /// <summary>Set for keys that send an E0 prefix: the navigation cluster, Keypad Enter, Keypad /.</summary>
+    private const uint LLKHF_EXTENDED = 0x01;
     private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
     private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
     private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
@@ -41,6 +43,14 @@ public sealed class InputCapture : IDisposable
     private bool _capsLockSwitchLatched;
     private volatile bool _passThrough;
     private volatile bool _running;
+    // Swapped from the settings-watcher thread while the hook thread reads it, so the field has
+    // to be volatile even though the reference assignment itself is atomic.
+    private volatile ShakeGestureDetector? _gesture;
+    // While input stays local the hook reports absolute positions, so the previous point is
+    // needed to turn them into the deltas the gesture is built on.
+    private int _lastLocalX, _lastLocalY;
+    private bool _haveLocalPoint;
+    private Func<int> _now = () => Environment.TickCount;
 
     public event Action<KeyModifiers, byte[]>? KeyboardReport;
     public event Action<MouseButtons, int, int, int>? MouseReport;
@@ -59,7 +69,24 @@ public sealed class InputCapture : IDisposable
         if (_passThrough == value) return;
         _passThrough = value;
         if (!value && _running) SetCursorPos(_centerX, _centerY);
+        // A target change invalidates gesture state: the shake that caused it is usually still
+        // being performed, and local deltas need a fresh reference point either way.
+        _gesture?.Reset();
+        _haveLocalPoint = false;
     }
+
+    /// <summary>
+    /// Enables or disables the pointer switch gesture. When enabled, shaking the pointer back
+    /// and forth cycles the target the same way the host-switch hotkey does. Pass null to disable.
+    /// </summary>
+    public void SetSwitchGesture(SwitchGestureOptions? options)
+    {
+        _gesture = options is { Enabled: true } ? new ShakeGestureDetector(options) : null;
+        _haveLocalPoint = false;
+    }
+
+    /// <summary>Test hook: replaces the wall clock used by the switch gesture.</summary>
+    internal void SetNow(Func<int> now) => _now = now;
 
     /// <summary>Logs every hook event and report; useful only for diagnosing delivery problems.</summary>
     public bool Verbose { get; init; }
@@ -111,6 +138,21 @@ public sealed class InputCapture : IDisposable
         _keyboardProc = KeyboardHookProc;
         _mouseProc = MouseHookProc;
 
+        var measureLatency = Environment.GetEnvironmentVariable("BLEHID_INPUT_TIMING") == "1";
+        var localKeyboardTiming = new HookTiming();
+        var remoteKeyboardTiming = new HookTiming();
+        var localMouseTiming = new HookTiming();
+        var remoteMouseTiming = new HookTiming();
+        if (measureLatency)
+        {
+            _keyboardProc = MeasureHook(_keyboardProc,
+                Marshal.OffsetOf<KBDLLHOOKSTRUCT>(nameof(KBDLLHOOKSTRUCT.time)).ToInt32(),
+                localKeyboardTiming, remoteKeyboardTiming);
+            _mouseProc = MeasureHook(_mouseProc,
+                Marshal.OffsetOf<MSLLHOOKSTRUCT>(nameof(MSLLHOOKSTRUCT.time)).ToInt32(),
+                localMouseTiming, remoteMouseTiming);
+        }
+
         var module = GetModuleHandle(null);
         _keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, _keyboardProc, module, 0);
         var keyboardError = Marshal.GetLastWin32Error();
@@ -140,6 +182,75 @@ public sealed class InputCapture : IDisposable
         if (_mouseHook != IntPtr.Zero) UnhookWindowsHookEx(_mouseHook);
         _keyboardHook = _mouseHook = _winEventHook = IntPtr.Zero;
         timeEndPeriod(1);
+
+        if (measureLatency)
+        {
+            var summary = new[]
+            {
+                $"local keyboard: {localKeyboardTiming}",
+                $"local mouse: {localMouseTiming}",
+                $"remote keyboard: {remoteKeyboardTiming}",
+                $"remote mouse: {remoteMouseTiming}"
+            };
+            foreach (var line in summary) Log?.Invoke($"  [input timing] {line}");
+            try
+            {
+                var path = AppPaths.InLogs($"input-timing-{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}.log");
+                File.WriteAllLines(path, summary);
+                Log?.Invoke($"  [input timing] saved to {path}");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log?.Invoke($"  [input timing] could not save summary: {ex.Message}");
+            }
+        }
+    }
+
+    private LowLevelProc MeasureHook(LowLevelProc callback, int timestampOffset,
+        HookTiming localTiming, HookTiming remoteTiming) => (code, wParam, lParam) =>
+    {
+        if (code != HC_ACTION) return callback(code, wParam, lParam);
+
+        var timing = _passThrough ? localTiming : remoteTiming;
+        var observedTime = Environment.TickCount;
+        var eventTime = Marshal.ReadInt32(lParam, timestampOffset);
+        var started = Stopwatch.GetTimestamp();
+        try
+        {
+            return callback(code, wParam, lParam);
+        }
+        finally
+        {
+            timing.Record(eventTime, observedTime, Stopwatch.GetTimestamp() - started);
+        }
+    };
+
+    internal sealed class HookTiming
+    {
+        public long Count { get; private set; }
+        public long TotalEventAgeMs { get; private set; }
+        public int MaxEventAgeMs { get; private set; }
+        public long TotalCallbackTicks { get; private set; }
+        public long MaxCallbackTicks { get; private set; }
+
+        public void Record(int eventTime, int observedTime, long callbackTicks)
+        {
+            var eventAgeMs = Math.Max(0, unchecked(observedTime - eventTime));
+            Count++;
+            TotalEventAgeMs += eventAgeMs;
+            MaxEventAgeMs = Math.Max(MaxEventAgeMs, eventAgeMs);
+            TotalCallbackTicks += callbackTicks;
+            MaxCallbackTicks = Math.Max(MaxCallbackTicks, callbackTicks);
+        }
+
+        public override string ToString()
+        {
+            var divisor = Math.Max(1, Count);
+            var averageAgeMs = (double)TotalEventAgeMs / divisor;
+            var averageCallbackMs = TotalCallbackTicks * 1000.0 / Stopwatch.Frequency / divisor;
+            var maxCallbackMs = MaxCallbackTicks * 1000.0 / Stopwatch.Frequency;
+            return FormattableString.Invariant($"events={Count}, event age avg/max={averageAgeMs:F2}/{MaxEventAgeMs} ms, hook+chain avg/max={averageCallbackMs:F3}/{maxCallbackMs:F3} ms");
+        }
     }
 
     private void ForegroundChanged(IntPtr hook, uint eventType, IntPtr window, int idObject, int idChild, uint thread, uint time)
@@ -165,12 +276,16 @@ public sealed class InputCapture : IDisposable
         var message = (int)wParam;
         var isDown = message is WM_KEYDOWN or WM_SYSKEYDOWN;
         var virtualKey = (int)data.vkCode;
-        return HandleKeyboardEvent(virtualKey, isDown)
+        return HandleKeyboardEvent(virtualKey, isDown, data.scanCode, (data.flags & LLKHF_EXTENDED) != 0)
             ? (IntPtr)1
             : CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
     }
 
-    internal bool HandleKeyboardEvent(int virtualKey, bool isDown)
+    /// <summary>
+    /// Scan code and the extended flag identify the physical key, which the virtual-key code
+    /// alone cannot: Windows has already applied the local Num Lock state by this point.
+    /// </summary>
+    internal bool HandleKeyboardEvent(int virtualKey, bool isDown, uint scanCode = 0, bool extended = false)
     {
         _keyboardEvents++;
         var releaseLocally = !isDown && _localPressedVirtualKeys.Remove(virtualKey);
@@ -222,7 +337,7 @@ public sealed class InputCapture : IDisposable
             return false;
         }
 
-        if (VirtualKeyMap.TryGetUsage(virtualKey, out var usage))
+        if (VirtualKeyMap.TryGetUsage(virtualKey, scanCode, extended, out var usage))
         {
             if (isDown) _pressedUsages.Add(usage);
             else _pressedUsages.Remove(usage);
@@ -239,9 +354,55 @@ public sealed class InputCapture : IDisposable
 
     private void RequestHostSwitch()
     {
+        // Release everything held before the target changes. These reports are queued ahead of
+        // the switch, so the outgoing host sees the release instead of being left with a key or
+        // a mouse button stuck down.
         _pressedUsages.Clear();
         KeyboardReport?.Invoke(KeyModifiers.None, []);
+        if (_buttons != MouseButtons.None)
+        {
+            _buttons = MouseButtons.None;
+            MouseReport?.Invoke(_buttons, 0, 0, 0);
+        }
         SwitchHostRequested?.Invoke();
+    }
+
+    /// <summary>
+    /// Local side of the switch gesture: the hook reports absolute positions while input stays
+    /// on this PC, so they are differenced into the deltas the recogniser expects.
+    /// </summary>
+    private void TrackLocalGesture(int x, int y)
+    {
+        if (_gesture is null) return;
+
+        // The first move after a target change has no predecessor; differencing against a stale
+        // point would manufacture one huge stroke.
+        if (!_haveLocalPoint)
+        {
+            _lastLocalX = x;
+            _lastLocalY = y;
+            _haveLocalPoint = true;
+            return;
+        }
+
+        var dx = x - _lastLocalX;
+        var dy = y - _lastLocalY;
+        _lastLocalX = x;
+        _lastLocalY = y;
+        TrackGesture(dx, dy);
+    }
+
+    /// <summary>
+    /// Feeds one pointer delta to the switch gesture. Deltas are available whichever way input
+    /// is flowing, so the same gesture works to hand input to a host and to take it back.
+    /// </summary>
+    internal void TrackGesture(int dx, int dy)
+    {
+        // Read once: the settings watcher can swap the detector out between the two uses.
+        var gesture = _gesture;
+        if (gesture is null || !gesture.Feed(dx, dy, _now())) return;
+        if (Verbose) Log?.Invoke("  [gesture] shake detected - switching target");
+        RequestHostSwitch();
     }
 
     private IntPtr MouseHookProc(int code, IntPtr wParam, IntPtr lParam)
@@ -252,7 +413,13 @@ public sealed class InputCapture : IDisposable
         if ((data.flags & LLMHF_INJECTED) != 0)
             return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
 
-        if (_passThrough) return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+        if (_passThrough)
+        {
+            // Input stays local, but pointer motion still feeds the switch gesture so a shake
+            // can hand input to a remote host.
+            if ((int)wParam == WM_MOUSEMOVE) TrackLocalGesture(data.pt.x, data.pt.y);
+            return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+        }
 
         _mouseEvents++;
 
@@ -266,6 +433,7 @@ public sealed class InputCapture : IDisposable
                     if (Verbose && _mouseEvents <= 10) Log?.Invoke($"  [mouse] move {dx},{dy}");
                     MouseReport?.Invoke(_buttons, dx, dy, 0);
                     SetCursorPos(_centerX, _centerY);
+                    TrackGesture(dx, dy);
                 }
                 break;
 

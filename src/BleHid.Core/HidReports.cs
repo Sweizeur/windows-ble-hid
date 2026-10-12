@@ -24,6 +24,19 @@ public enum MouseButtons : byte
 }
 
 /// <summary>
+/// Lock keys whose state the host owns rather than the keyboard. Values match the HID LED
+/// report bit positions, so a report byte casts straight across. Scroll Lock is deliberately
+/// left out: nothing on a phone reacts to it, so reporting it would only add noise.
+/// </summary>
+[Flags]
+public enum LockKeys : byte
+{
+    None     = 0x00,
+    NumLock  = 0x01,
+    CapsLock = 0x02
+}
+
+/// <summary>
 /// Builds HID input report payloads. In HOGP report-protocol mode the Report ID is
 /// conveyed by the characteristic's Report Reference descriptor, not the payload.
 /// </summary>
@@ -31,7 +44,6 @@ public static class HidReports
 {
     public const int KeyboardReportLength = 8;
     public const int MouseReportLength    = 6;
-
     public static byte[] Keyboard(KeyModifiers modifiers, params byte[] usages)
     {
         var report = new byte[KeyboardReportLength];

@@ -203,7 +203,9 @@ rebuilding, or the build fails with `MSB3026`.
 | `capture <ms>` | Same, with a custom pointer report interval |
 | `host` | List subscribed hosts and the current target |
 | `host <n\|next\|local\|all>` | Choose the target |
-| `status` | Advertisement state, subscriber counts, current target |
+| `gesture` | Show whether shake-to-switch is on |
+| `gesture <on\|off>` | Toggle shake-to-switch; applies to a running session |
+| `status` | Advertisement state, subscriber counts, current target, lock keys |
 | `quit` | Exit |
 
 ### Hotkeys while capturing
@@ -218,6 +220,54 @@ machine normally. The hotkeys stay live in that mode.
 
 `Ctrl` + `Alt` + `CapsLock` cycles once per Caps Lock press without toggling Caps Lock
 locally or on the host. Ordinary Caps Lock presses are unchanged.
+
+### Shake to switch
+
+Shaking the pointer rapidly back and forth also cycles the target, so you can switch without
+reaching for the keyboard. It is **off by default** — turn it on with `gesture on`, the
+**Settings** page in the app, or by editing `%LOCALAPPDATA%\BleHid\switch-gesture.json`:
+
+```json
+{
+  "Enabled": true,
+  "MinStrokePx": 80,
+  "RequiredReversals": 3,
+  "WindowMs": 250
+}
+```
+
+| Setting | Range | Effect |
+| --- | --- | --- |
+| `MinStrokePx` | 20–500 | Travel needed for one sweep to count. Lower is easier to trigger |
+| `RequiredReversals` | 2–10 | Direction changes needed. 3 means four strokes |
+| `WindowMs` | 100–5000 | All reversals must land within this. Lower demands a faster shake |
+
+The file is watched, so a change applies to a running session — including background mode,
+which is a separate process. A short window is the strongest defence against false
+positives: ordinary pointer movement never reaches that speed. Out-of-range values are
+clamped and the clamping is logged.
+
+The gesture is a convenience; the hotkeys above remain the guaranteed way to switch.
+
+### Lock key state
+
+Caps Lock on a host you cannot see is invisible until you have typed a line in the wrong
+case. BleHid reports it in the log on every switch, in `host` and `status`, on the Capture
+page, and in the tray tooltip.
+
+Where the host writes the HID LED output report — confirmed on Android 16 — the state is
+**measured**. Otherwise it is **inferred** from the lock keys sent to that host, which is
+usually right but cannot correct itself. The CLI labels which one you are looking at.
+
+Num Lock is tracked the same way, but only reported once the numpad has actually been used
+on that host: hosts with no Num Lock key report it permanently off, and warning about that
+unprompted would never clear. Scroll Lock is not tracked.
+
+Numpad keys are resolved from the physical key rather than the virtual key Windows derives
+from it, so **this PC's Num Lock no longer decides what the remote receives**. A real
+keyboard has no Num Lock state of its own; it reports the key and lets the host apply its
+own setting, and BleHid now does the same. Keypad Enter is sent as Keypad Enter rather than
+as the main Enter.
 
 ### Scripted input
 
@@ -249,17 +299,25 @@ Useful for automation or for testing the link without handing over your keyboard
 
 Measured on real devices. Absence from this table means untested, not unsupported.
 
-| Host | Pairs | Input works | Reconnects after app restart |
-| --- | --- | --- | --- |
-| macOS | Yes | Yes | **Yes** — automatic |
-| Android 16 (Galaxy S24 FE) | Yes | Yes | Automatic while the app stays running; manual after app restart |
-| Android 11 (Galaxy S20 FE) | Yes | **No** — binds BR/EDR instead of LE | — |
-| Windows 11 | Yes — **pick the right entry**, see below | Yes | **No** — see below |
-| iOS (iPhone) | Yes | Yes — pointer needs **AssistiveTouch**, see below | Untested |
-| iPadOS | Untested | | |
-| Linux | Untested | | |
-| Samsung TV (Tizen) | **No** — the PC never appears in its device list | — | — |
-| Consoles, BIOS/UEFI | Untested | | |
+| Host | Pairs | Input works | Reconnects after app restart | Reports lock keys |
+| --- | --- | --- | --- | --- |
+| macOS | Yes | Yes | **Yes** — automatic | Untested |
+| Android 16 (Galaxy S24 FE) | Yes | Yes | Automatic while the app stays running; manual after app restart | **Yes** — measured |
+| Android 11 (Galaxy S20 FE) | Yes | **No** — binds BR/EDR instead of LE | — | — |
+| Windows 11 | Yes — **pick the right entry**, see below | Yes | **No** — see below | Untested |
+| iOS (iPhone) | Yes | Yes — pointer needs **AssistiveTouch**, see below | Untested | Untested |
+| iPadOS | Untested | | | |
+| Linux | Untested | | | |
+| Samsung TV (Tizen) | **No** — the PC never appears in its device list | — | — | — |
+| Consoles, BIOS/UEFI | Untested — boot protocol is not implemented | | | |
+
+"Reports lock keys" means the host writes the HID LED output report, so Caps Lock and Num
+Lock state is **measured**. Hosts that do not fall back to inferring it from the keystrokes
+sent to them, which is usually right but cannot self-correct.
+
+Boot protocol is not implemented — there are no Boot Keyboard Input/Output characteristics
+(`0x2A22` / `0x2A32`). A host that insists on boot protocol, which is the usual case for
+BIOS/UEFI, will not get input.
 
 Older Android builds attach to the PC's Classic radio rather than the LE peripheral and
 never bind HOGP. Newer builds handle it correctly. The cutoff between the two has not been

@@ -30,6 +30,21 @@ public static class CaptureSession
         var stopped = new TaskCompletionSource();
         using var registration = cancellationToken.Register(() => stopped.TrySetResult());
 
+        // The pointer switch gesture is opt-in via a JSON file, and that file is watched so a
+        // toggle from the UI or another CLI instance reaches this session without a restart.
+        using var gestureWatcher = new SwitchGestureWatcher(AppPaths.SwitchGestureConfig);
+        ApplyGesture(gestureWatcher.Current);
+        gestureWatcher.Changed += ApplyGesture;
+
+        void ApplyGesture(SwitchGestureOptions options)
+        {
+            capture.SetSwitchGesture(options);
+            if (options.Warning is { } warning) log($"  [gesture] {warning}");
+            log(options.Enabled
+                ? $"  [gesture] shake to switch enabled ({options.RequiredReversals} reversals of {options.MinStrokePx}px within {options.WindowMs}ms)"
+                : "  [gesture] shake to switch disabled");
+        }
+
         // Keystrokes must all be delivered, but pointer motion is coalesced: the hook produces
         // far more events than the BLE link can carry. Target changes travel through the same
         // queue so they take effect only after the key-release report has gone to the old host.
@@ -82,12 +97,22 @@ public static class CaptureSession
                     {
                         if (key.Kind is Queued.SwitchHost or Queued.GoLocal)
                         {
+                            // Read before the target moves: this is the host we are leaving, and
+                            // a lock left on there is invisible once we stop sending to it.
+                            var leftHost = peripheral.IsLocalTarget ? null : peripheral.SelectedHostDisplay;
+                            var leftLocks = peripheral.TargetLockWarning;
+
                             await peripheral.RefreshHostNamesAsync();
                             var target = key.Kind == Queued.GoLocal
                                 ? peripheral.SelectLocal()
                                 : peripheral.SelectNextHost();
                             capture.SetPassThrough(peripheral.IsLocalTarget);
-                            log($"  [host] -> {target} (pointer interval {PointerIntervalMs()} ms)");
+
+                            var locks = peripheral.TargetLockWarning;
+                            var arriving = locks is null ? string.Empty : $" - {locks}";
+                            log($"  [host] -> {target} (pointer interval {PointerIntervalMs()} ms){arriving}");
+                            if (leftLocks is not null && leftHost is not null)
+                                log($"  [host] left {leftHost} with {leftLocks}");
                             continue;
                         }
 

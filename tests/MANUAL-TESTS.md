@@ -20,12 +20,12 @@ is gitignored.
 
 | Role | Expected |
 |---|---|
-| macOS laptop | pairs, auto-reconnects |
-| Android 16 phone (primary test device) | full function; the reference for latency |
-| Windows 11 laptop A | pairs; **known reconnect bug** |
-| Windows 11 laptop B | pairs; **known reconnect bug** |
+| macOS laptop | pairs, auto-reconnects; **lock-key reporting unverified** |
+| Android 16 phone (primary test device) | full function; the reference for latency; **reports lock keys** |
+| Windows 11 laptop A | pairs; **known reconnect bug**; lock-key reporting unverified |
+| Windows 11 laptop B | pairs; **known reconnect bug**; lock-key reporting unverified |
 | Android 11 phone | **known failure**, binds BR/EDR instead of LE |
-| iPhone | pairs; pointer needs AssistiveTouch enabled |
+| iPhone | pairs; pointer needs AssistiveTouch enabled; lock-key reporting unverified |
 
 ---
 
@@ -47,6 +47,30 @@ For each device in the table above:
 - [ ] `move 100 0` / `move 0 100` move the pointer in the expected direction
 - [ ] `click l`, `click r`, `click m` register
 - [ ] `scroll 3` and `scroll -3` scroll opposite ways
+- [ ] Numpad digits type digits with **this PC's** Num Lock on
+- [ ] **Numpad digits still type digits with this PC's Num Lock off** — the remote host's own
+      Num Lock decides, not ours
+- [ ] Numpad `.` `/` `*` `-` `+` all arrive correctly
+- [ ] Keypad Enter works where the host binds it separately from the main Enter
+- [ ] The dedicated Home/End/arrow keys still send navigation, not numpad digits
+- [ ] `status` shows caps and num lock lines, labelled `measured` or `inferred`
+- [ ] Record in the table above whether this host reports lock keys
+
+## 2a. Lock key reporting
+
+Needs a host that reports lock keys. Android 16 is the only confirmed one.
+
+- [ ] A fresh connection logs `LED reports available from …`
+- [ ] Toggling Caps Lock **on the host itself** updates BleHid without any keystroke from the PC
+- [ ] Switching to a host with Caps Lock on logs `- CAPS LOCK ON` on the switch line
+- [ ] Switching away from it logs `left <host> with CAPS LOCK ON`
+- [ ] The Capture page shows a warning bar while the target has Caps Lock on
+- [ ] The tray tooltip shows the target and the lock state; a balloon appears once, not repeatedly
+- [ ] **Num Lock off alone raises no warning until a numpad key is used on that host**
+- [ ] With two hosts connected, each reports its **own** lock state — not the other's
+- [ ] Disconnecting a host clears its remembered lock state rather than carrying it over
+- [ ] A host that does **not** report lamps still shows a state, labelled `inferred`
+- [ ] `Ctrl+Alt+CapsLock` still does not toggle Caps Lock on the host — now directly observable
 
 ## 3. Capture mode (CLI)
 
@@ -58,6 +82,25 @@ For each device in the table above:
 - [ ] Holding Caps Lock in the new chord cycles only once; releasing and pressing it cycles again
 - [ ] `Ctrl+Alt+Q` ends the session and returns input to the PC
 - [ ] After `Ctrl+Alt+Q`, the local keyboard works normally again
+
+## 3a. Shake to switch
+
+Off by default. Turn it on with `gesture on` or the Settings toggle.
+
+- [ ] `gesture` with no argument reports the current state and tuning
+- [ ] `gesture on` / `gesture off` persist, and `gesture` reflects the change
+- [ ] Toggling preserves hand-edited `MinStrokePx` / `RequiredReversals` / `WindowMs`
+- [ ] Shaking the pointer rapidly left-right cycles the target, logged like the hotkey
+- [ ] Shaking up-down works too
+- [ ] **Ordinary mouse use never triggers it** — spend a few minutes working normally
+- [ ] Slamming the pointer into a screen corner does not trigger it
+- [ ] One long shake fires once, not repeatedly
+- [ ] Shaking while a mouse button is held does not leave a drag stuck on the old host
+- [ ] Editing `switch-gesture.json` applies to a **running** session without a restart
+- [ ] The same edit reaches a running **background** instance, which is a separate process
+- [ ] The Settings toggle and the config file stay in step with each other
+- [ ] Out-of-range values are clamped and the clamping is logged
+- [ ] With the gesture off, shaking does nothing
 
 ## 4. Capture mode (UI)
 
