@@ -139,25 +139,50 @@ public sealed class SwitchGestureOptionsTests
         Assert.Equal(1200, toggled.WindowMs);
     }
 
-    [Fact]
-    public async Task A_toggle_written_to_disk_reaches_a_running_watcher()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_toggle_written_to_disk_reaches_a_running_watcher(bool enabled)
     {
         var path = Path.Combine(Path.GetTempPath(), $"blehid-gesture-{Guid.NewGuid():N}.json");
-        SwitchGestureOptions.ForTest(false, 80, 3, 800).TrySave(path, out _);
+        Assert.True(SwitchGestureOptions.ForTest(!enabled, 80, 3, 800).TrySave(path, out _));
         try
         {
             using var watcher = new SwitchGestureWatcher(path);
-            Assert.False(watcher.Current.Enabled);
+            Assert.Equal(!enabled, watcher.Current.Enabled);
 
-            var seen = new TaskCompletionSource<SwitchGestureOptions>();
+            var seen = new TaskCompletionSource<SwitchGestureOptions>(TaskCreationOptions.RunContinuationsAsynchronously);
             watcher.Changed += options => seen.TrySetResult(options);
 
-            SwitchGestureOptions.ForTest(true, 80, 3, 800).TrySave(path, out _);
+            Assert.True(SwitchGestureOptions.ForTest(enabled, 80, 3, 800).TrySave(path, out _));
 
             var finished = await Task.WhenAny(seen.Task, Task.Delay(TimeSpan.FromSeconds(10)));
             Assert.True(ReferenceEquals(finished, seen.Task), "the watcher never reported the change");
-            Assert.True((await seen.Task).Enabled);
-            Assert.True(watcher.Current.Enabled);
+            Assert.Equal(enabled, (await seen.Task).Enabled);
+            Assert.Equal(enabled, watcher.Current.Enabled);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Reopening_a_watcher_loads_changes_made_while_it_was_disposed()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"blehid-gesture-{Guid.NewGuid():N}.json");
+        try
+        {
+            Assert.True(SwitchGestureOptions.ForTest(false, 80, 3, 800).TrySave(path, out _));
+            using (var watcher = new SwitchGestureWatcher(path))
+                Assert.False(watcher.Current.Enabled);
+
+            Assert.True(SwitchGestureOptions.ForTest(true, 150, 5, 1200).TrySave(path, out _));
+            using var reopened = new SwitchGestureWatcher(path);
+            Assert.True(reopened.Current.Enabled);
+            Assert.Equal(150, reopened.Current.MinStrokePx);
+            Assert.Equal(5, reopened.Current.RequiredReversals);
+            Assert.Equal(1200, reopened.Current.WindowMs);
         }
         finally
         {

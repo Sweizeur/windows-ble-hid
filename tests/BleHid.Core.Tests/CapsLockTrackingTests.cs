@@ -185,6 +185,28 @@ public sealed class CapsLockTrackingTests
     public void Only_lock_states_that_can_bite_are_described(LockKeys keys, bool numpadUsed, string? expected)
     {
         Assert.Equal(expected, BleHidPeripheral.DescribeLockKeys(keys, numpadUsed));
+        Assert.Equal(expected, BleHidPeripheral.DescribeTargetLockKeys([(keys, numpadUsed)]));
+    }
+
+    [Theory]
+    [InlineData(LockKeys.NumLock, true, LockKeys.None, true, "NUM LOCK OFF")]
+    [InlineData(LockKeys.None, true, LockKeys.NumLock, true, "NUM LOCK OFF")]
+    [InlineData(LockKeys.NumLock, true, LockKeys.None, false, null)]
+    [InlineData(LockKeys.CapsLock | LockKeys.NumLock, false, LockKeys.None, true, "CAPS LOCK ON, NUM LOCK OFF")]
+    [InlineData(LockKeys.CapsLock, false, LockKeys.NumLock, true, "CAPS LOCK ON")]
+    [InlineData(LockKeys.NumLock, true, LockKeys.NumLock, true, null)]
+    [InlineData(LockKeys.None, false, LockKeys.None, false, null)]
+    public void Broadcast_lock_warnings_are_evaluated_per_host(
+        LockKeys firstKeys, bool firstNumpadUsed, LockKeys secondKeys, bool secondNumpadUsed, string? expected)
+    {
+        Assert.Equal(expected, BleHidPeripheral.DescribeTargetLockKeys(
+            [(firstKeys, firstNumpadUsed), (secondKeys, secondNumpadUsed)]));
+    }
+
+    [Fact]
+    public void No_targeted_hosts_produces_no_lock_warning()
+    {
+        Assert.Null(BleHidPeripheral.DescribeTargetLockKeys([]));
     }
 
     [Theory]

@@ -37,6 +37,7 @@ public sealed class InputCapture : IDisposable
     private Thread? _thread;
     private uint _threadId;
     private MouseButtons _buttons;
+    private MouseButtons _localButtons;
     private int _centerX, _centerY;
     private int _keyboardEvents, _mouseEvents, _rearms;
     private bool _switchLatched;
@@ -405,6 +406,24 @@ public sealed class InputCapture : IDisposable
         RequestHostSwitch();
     }
 
+    internal bool HandleMouseButtonEvent(MouseButtons button, bool isDown)
+    {
+        var releaseLocally = !isDown && (_localButtons & button) != MouseButtons.None;
+        if (!isDown) _localButtons &= ~button;
+
+        if (_passThrough)
+        {
+            if (isDown) _localButtons |= button;
+            return false;
+        }
+
+        _mouseEvents++;
+        if (isDown) _buttons |= button;
+        else _buttons &= ~button;
+        MouseReport?.Invoke(_buttons, 0, 0, 0);
+        return !releaseLocally;
+    }
+
     private IntPtr MouseHookProc(int code, IntPtr wParam, IntPtr lParam)
     {
         if (code != HC_ACTION) return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
@@ -412,6 +431,22 @@ public sealed class InputCapture : IDisposable
         var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
         if ((data.flags & LLMHF_INJECTED) != 0)
             return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+
+        var message = (int)wParam;
+        var button = message switch
+        {
+            WM_LBUTTONDOWN or WM_LBUTTONUP => MouseButtons.Left,
+            WM_RBUTTONDOWN or WM_RBUTTONUP => MouseButtons.Right,
+            WM_MBUTTONDOWN or WM_MBUTTONUP => MouseButtons.Middle,
+            _ => MouseButtons.None
+        };
+        if (button != MouseButtons.None)
+        {
+            var isDown = message is WM_LBUTTONDOWN or WM_RBUTTONDOWN or WM_MBUTTONDOWN;
+            return HandleMouseButtonEvent(button, isDown)
+                ? (IntPtr)1
+                : CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+        }
 
         if (_passThrough)
         {
@@ -436,13 +471,6 @@ public sealed class InputCapture : IDisposable
                     TrackGesture(dx, dy);
                 }
                 break;
-
-            case WM_LBUTTONDOWN: _buttons |= MouseButtons.Left; MouseReport?.Invoke(_buttons, 0, 0, 0); break;
-            case WM_LBUTTONUP:   _buttons &= ~MouseButtons.Left; MouseReport?.Invoke(_buttons, 0, 0, 0); break;
-            case WM_RBUTTONDOWN: _buttons |= MouseButtons.Right; MouseReport?.Invoke(_buttons, 0, 0, 0); break;
-            case WM_RBUTTONUP:   _buttons &= ~MouseButtons.Right; MouseReport?.Invoke(_buttons, 0, 0, 0); break;
-            case WM_MBUTTONDOWN: _buttons |= MouseButtons.Middle; MouseReport?.Invoke(_buttons, 0, 0, 0); break;
-            case WM_MBUTTONUP:   _buttons &= ~MouseButtons.Middle; MouseReport?.Invoke(_buttons, 0, 0, 0); break;
 
             case WM_MOUSEWHEEL:
                 var notches = (short)((data.mouseData >> 16) & 0xFFFF) / 120;

@@ -68,6 +68,7 @@ Needs a host that reports lock keys. Android 16 is the only confirmed one.
 - [ ] The tray tooltip shows the target and the lock state; a balloon appears once, not repeatedly
 - [ ] **Num Lock off alone raises no warning until a numpad key is used on that host**
 - [ ] With two hosts connected, each reports its **own** lock state — not the other's
+- [ ] In broadcast mode, Num Lock on at one host does not hide a Num Lock-off warning for another host whose numpad has been used
 - [ ] Disconnecting a host clears its remembered lock state rather than carrying it over
 - [ ] A host that does **not** report lamps still shows a state, labelled `inferred`
 - [ ] `Ctrl+Alt+CapsLock` still does not toggle Caps Lock on the host — now directly observable
@@ -96,9 +97,12 @@ Off by default. Turn it on with `gesture on` or the Settings toggle.
 - [ ] Slamming the pointer into a screen corner does not trigger it
 - [ ] One long shake fires once, not repeatedly
 - [ ] Shaking while a mouse button is held does not leave a drag stuck on the old host
+- [ ] Both cycle hotkeys also release held mouse buttons on the outgoing host before switching
+- [ ] Holding a mouse button on **This PC**, shaking to a host, then releasing it leaves no local drag stuck after returning
 - [ ] Editing `switch-gesture.json` applies to a **running** session without a restart
 - [ ] The same edit reaches a running **background** instance, which is a separate process
-- [ ] The Settings toggle and the config file stay in step with each other
+- [ ] With Settings open, enabling or disabling the gesture in the config file updates the toggle without clicking it
+- [ ] Leaving Settings, editing the config, then returning shows the current value
 - [ ] Out-of-range values are clamped and the clamping is logged
 - [ ] With the gesture off, shaking does nothing
 

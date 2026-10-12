@@ -104,8 +104,13 @@ ignored and are not a feedback source.
 
 Pointer deltas may be merged before notification because a mouse produces events faster
 than BLE can carry them. Every keyboard state transition must be preserved. Target changes
-travel through the keyboard queue so a key-release report cannot be delivered to the new
-host and leave a modifier stuck on the old one.
+travel through the ordered report queue. Pending mouse state, including button releases,
+is flushed into that queue before a target change, so releases reach the outgoing host.
+Mouse input arriving during a pacing delay must not overtake a queued target change.
+
+Keys and mouse buttons pressed while input is local are tracked separately. Their matching
+releases still pass through to Windows after redirect resumes, so switching away mid-press
+cannot leave a modifier or local drag stuck.
 
 ### Host loss fails back to local input
 

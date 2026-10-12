@@ -9,7 +9,68 @@ namespace BleHid.Core;
 /// </summary>
 public static class CaptureSession
 {
-    private enum Queued { Report, SwitchHost, GoLocal }
+    internal enum Queued { Report, MouseReport, SwitchHost, GoLocal }
+
+    internal readonly record struct InputReport(Queued Kind,
+        KeyModifiers Modifiers = KeyModifiers.None, byte[]? Usages = null,
+        MouseButtons Buttons = MouseButtons.None, int Dx = 0, int Dy = 0, int Wheel = 0);
+
+    internal sealed class ReportQueue
+    {
+        private readonly ConcurrentQueue<InputReport> _ordered = new();
+        private readonly object _mouseLock = new();
+        private InputReport? _pendingMouse;
+
+        public bool HasMouseReport
+        {
+            get { lock (_mouseLock) return _pendingMouse.HasValue; }
+        }
+
+        public void EnqueueKeyboard(KeyModifiers modifiers, byte[] usages) =>
+            _ordered.Enqueue(new(Queued.Report, modifiers, usages));
+
+        public void EnqueueMouse(MouseButtons buttons, int dx, int dy, int wheel)
+        {
+            lock (_mouseLock)
+            {
+                var pending = _pendingMouse.GetValueOrDefault();
+                _pendingMouse = new(Queued.MouseReport, Buttons: buttons,
+                    Dx: pending.Dx + dx, Dy: pending.Dy + dy, Wheel: pending.Wheel + wheel);
+            }
+        }
+
+        public void EnqueueTargetChange(Queued kind)
+        {
+            lock (_mouseLock)
+            {
+                if (_pendingMouse is { } mouse)
+                {
+                    _ordered.Enqueue(mouse);
+                    _pendingMouse = null;
+                }
+                _ordered.Enqueue(new(kind));
+            }
+        }
+
+        public bool TryDequeue(out InputReport report) => _ordered.TryDequeue(out report);
+
+        public bool TryTakeMouseReport(out InputReport report)
+        {
+            lock (_mouseLock)
+            {
+                if (!_ordered.IsEmpty)
+                {
+                    report = default;
+                    return false;
+                }
+
+                report = _pendingMouse.GetValueOrDefault();
+                var available = _pendingMouse.HasValue;
+                _pendingMouse = null;
+                return available;
+            }
+        }
+    }
 
     /// <param name="mouseIntervalMs">
     /// Read per report rather than captured, so the UI can retune pacing without restarting.
@@ -48,11 +109,7 @@ public static class CaptureSession
         // Keystrokes must all be delivered, but pointer motion is coalesced: the hook produces
         // far more events than the BLE link can carry. Target changes travel through the same
         // queue so they take effect only after the key-release report has gone to the old host.
-        var keyQueue = new ConcurrentQueue<(Queued Kind, KeyModifiers Modifiers, byte[]? Usages)>();
-        var mouseLock = new object();
-        int pendingDx = 0, pendingDy = 0, pendingWheel = 0;
-        var pendingButtons = MouseButtons.None;
-        var mouseDirty = false;
+        var reports = new ReportQueue();
         var sent = 0;
 
         // The radio interleaves connection events across every subscribed link, so a second host
@@ -93,8 +150,16 @@ public static class CaptureSession
 
                 try
                 {
-                    while (keyQueue.TryDequeue(out var key))
+                    while (reports.TryDequeue(out var key))
                     {
+                        if (key.Kind == Queued.MouseReport)
+                        {
+                            await peripheral.SendMouseAsync(key.Buttons, key.Dx, key.Dy, key.Wheel);
+                            lastMouseSend = clock.ElapsedMilliseconds;
+                            Interlocked.Increment(ref sent);
+                            continue;
+                        }
+
                         if (key.Kind is Queued.SwitchHost or Queued.GoLocal)
                         {
                             // Read before the target moves: this is the host we are leaving, and
@@ -123,9 +188,7 @@ public static class CaptureSession
                         Interlocked.Increment(ref sent);
                     }
 
-                    bool hasMotion;
-                    lock (mouseLock) hasMotion = mouseDirty;
-                    if (!hasMotion) continue;
+                    if (!reports.HasMouseReport) continue;
 
                     // NotifyValueAsync returns on queueing, so overshoot is invisible here and
                     // shows up as pointer drift after the user stops moving.
@@ -135,21 +198,13 @@ public static class CaptureSession
                     if (sinceLast < interval)
                         await Task.Delay((int)(interval - sinceLast), pumpCancellation.Token);
 
-                    int dx, dy, wheel;
-                    MouseButtons buttons;
-                    lock (mouseLock)
-                    {
-                        dx = pendingDx; dy = pendingDy; wheel = pendingWheel;
-                        buttons = pendingButtons;
-                        pendingDx = pendingDy = pendingWheel = 0;
-                        mouseDirty = false;
-                    }
+                    if (!reports.TryTakeMouseReport(out var mouse)) continue;
 
                     {
                         var started = clock.ElapsedMilliseconds;
-                        await peripheral.SendMouseAsync(buttons, dx, dy, wheel);
+                        await peripheral.SendMouseAsync(mouse.Buttons, mouse.Dx, mouse.Dy, mouse.Wheel);
                         lastMouseSend = clock.ElapsedMilliseconds;
-                        if (verbose && sent < 40) log($"  [pump] mouse notify #{sent} ({dx},{dy}) took {lastMouseSend - started} ms");
+                        if (verbose && sent < 40) log($"  [pump] mouse notify #{sent} ({mouse.Dx},{mouse.Dy}) took {lastMouseSend - started} ms");
                         Interlocked.Increment(ref sent);
                     }
                 }
@@ -166,24 +221,17 @@ public static class CaptureSession
         capture.Log += message => log(message);
         capture.KeyboardReport += (modifiers, usages) =>
         {
-            keyQueue.Enqueue((Queued.Report, modifiers, usages));
+            reports.EnqueueKeyboard(modifiers, usages);
             Wake();
         };
         capture.MouseReport += (buttons, dx, dy, wheel) =>
         {
-            lock (mouseLock)
-            {
-                pendingDx += dx;
-                pendingDy += dy;
-                pendingWheel += wheel;
-                pendingButtons = buttons;
-                mouseDirty = true;
-            }
+            reports.EnqueueMouse(buttons, dx, dy, wheel);
             Wake();
         };
         capture.SwitchHostRequested += () =>
         {
-            keyQueue.Enqueue((Queued.SwitchHost, KeyModifiers.None, null));
+            reports.EnqueueTargetChange(Queued.SwitchHost);
             Wake();
         };
         capture.StopRequested += () =>
@@ -197,7 +245,7 @@ public static class CaptureSession
             // Local recovery must not wait behind a notification to a host that just vanished.
             // Keep GoLocal queued as well so a healthy host still receives key releases first.
             capture.SetPassThrough(true);
-            keyQueue.Enqueue((Queued.GoLocal, KeyModifiers.None, null));
+            reports.EnqueueTargetChange(Queued.GoLocal);
             Wake();
         };
 

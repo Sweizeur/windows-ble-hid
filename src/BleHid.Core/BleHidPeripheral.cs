@@ -548,15 +548,28 @@ public sealed class BleHidPeripheral : IAsyncDisposable
         return numOff ? "NUM LOCK OFF" : null;
     }
 
+    internal static string? DescribeTargetLockKeys(IEnumerable<(LockKeys Keys, bool NumpadUsed)> hosts)
+    {
+        var capsOn = false;
+        var numOff = false;
+        foreach (var host in hosts)
+        {
+            capsOn |= host.Keys.HasFlag(LockKeys.CapsLock);
+            numOff |= host.NumpadUsed && !host.Keys.HasFlag(LockKeys.NumLock);
+        }
+        return DescribeLockKeys(capsOn ? LockKeys.CapsLock : LockKeys.None, numOff);
+    }
+
     /// <summary>True when the numpad has been used against the given host.</summary>
     public bool NumpadUsed(string deviceId) => _lockState.NumpadUsed(deviceId);
 
     /// <summary>
     /// What is worth saying about the current target's lock keys, or null when nothing is.
     /// </summary>
-    public string? TargetLockWarning => DescribeLockKeys(
-        TargetLockKeys,
-        !_localOnly && TargetedHosts().Any(host => NumpadUsed(host.DeviceId)));
+    public string? TargetLockWarning => _localOnly
+        ? null
+        : DescribeTargetLockKeys(TargetedHosts().Select(host =>
+            (LockKeysFor(host.DeviceId), NumpadUsed(host.DeviceId))));
 
     /// <summary>The hosts a report would currently reach: the selected one, or all when broadcasting.</summary>
     private List<HostTarget> TargetedHosts()

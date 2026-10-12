@@ -332,21 +332,179 @@ public sealed class InputCaptureTests
         Assert.Equal(0, switches);
     }
 
-    [Fact]
-    public void Switching_target_releases_a_held_mouse_button()
+    [Theory]
+    [InlineData(MouseButtons.Left)]
+    [InlineData(MouseButtons.Right)]
+    [InlineData(MouseButtons.Middle)]
+    public void Switching_target_releases_a_held_mouse_button(MouseButtons button)
     {
-        // A button still down on the outgoing host reads as a drag that never ends.
         using var capture = new InputCapture();
         capture.SetPassThrough(false);
 
         var buttonReports = new List<MouseButtons>();
         capture.MouseReport += (buttons, _, _, _) => buttonReports.Add(buttons);
+        Assert.True(capture.HandleMouseButtonEvent(button, true));
+        Assert.Equal(new[] { button }, buttonReports);
+        var switches = 0;
+        capture.SwitchHostRequested += () =>
+        {
+            Assert.Equal(new[] { button, MouseButtons.None }, buttonReports);
+            switches++;
+        };
 
         capture.HandleKeyboardEvent(LeftControl, true);
         capture.HandleKeyboardEvent(LeftAlt, true);
         capture.HandleKeyboardEvent(CapsLock, true);
 
-        // No button was held, so no spurious release should be sent either.
+        Assert.Equal(1, switches);
+        Assert.True(capture.HandleMouseButtonEvent(button, false));
+        Assert.Equal(MouseButtons.None, buttonReports[^1]);
+    }
+
+    [Theory]
+    [InlineData(MouseButtons.Left)]
+    [InlineData(MouseButtons.Right)]
+    [InlineData(MouseButtons.Middle)]
+    public void Shaking_away_from_local_preserves_the_local_mouse_release(MouseButtons button)
+    {
+        using var capture = new InputCapture();
+        capture.SetPassThrough(true);
+        capture.SetSwitchGesture(SwitchGestureOptions.ForTest(true, 80, 3, 800));
+        var now = 1000;
+        capture.SetNow(() => now);
+        capture.SwitchHostRequested += () => capture.SetPassThrough(false);
+        var buttonReports = new List<MouseButtons>();
+        capture.MouseReport += (buttons, _, _, _) => buttonReports.Add(buttons);
+
+        Assert.False(capture.HandleMouseButtonEvent(button, true));
+        foreach (var delta in new[] { 100, -100, 100, -100 })
+        {
+            now += 50;
+            capture.TrackGesture(delta, 0);
+        }
+
+        Assert.False(capture.PassThrough);
         Assert.Empty(buttonReports);
+        Assert.False(capture.HandleMouseButtonEvent(button, false));
+        Assert.Equal(new[] { MouseButtons.None }, buttonReports);
+
+        Assert.True(capture.HandleMouseButtonEvent(button, true));
+        Assert.True(capture.HandleMouseButtonEvent(button, false));
+        Assert.Equal(new[] { MouseButtons.None, button, MouseButtons.None }, buttonReports);
+    }
+
+    [Fact]
+    public void Local_mouse_releases_remain_independent_when_multiple_buttons_are_held()
+    {
+        using var capture = new InputCapture();
+        capture.SetPassThrough(true);
+        Assert.False(capture.HandleMouseButtonEvent(MouseButtons.Left, true));
+        Assert.False(capture.HandleMouseButtonEvent(MouseButtons.Right, true));
+
+        capture.SetPassThrough(false);
+        Assert.False(capture.HandleMouseButtonEvent(MouseButtons.Left, false));
+        Assert.False(capture.HandleMouseButtonEvent(MouseButtons.Right, false));
+        Assert.True(capture.HandleMouseButtonEvent(MouseButtons.Middle, false));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Mouse_releases_are_queued_before_the_target_changes(bool goLocal)
+    {
+        var queue = new CaptureSession.ReportQueue();
+        var targetChange = goLocal ? CaptureSession.Queued.GoLocal : CaptureSession.Queued.SwitchHost;
+        queue.EnqueueMouse(MouseButtons.Left, 40, -10, 1);
+        queue.EnqueueKeyboard(KeyModifiers.None, []);
+        queue.EnqueueMouse(MouseButtons.None, 0, 0, 0);
+        queue.EnqueueTargetChange(targetChange);
+
+        Assert.True(queue.TryDequeue(out var keyboard));
+        Assert.Equal(CaptureSession.Queued.Report, keyboard.Kind);
+        Assert.True(queue.TryDequeue(out var release));
+        Assert.Equal(CaptureSession.Queued.MouseReport, release.Kind);
+        Assert.Equal(MouseButtons.None, release.Buttons);
+        Assert.Equal((40, -10, 1), (release.Dx, release.Dy, release.Wheel));
+        Assert.True(queue.TryDequeue(out var change));
+        Assert.Equal(targetChange, change.Kind);
+        Assert.False(queue.TryDequeue(out _));
+        Assert.False(queue.HasMouseReport);
+        Assert.False(queue.TryTakeMouseReport(out _));
+
+        queue.EnqueueMouse(MouseButtons.Right, -5, 2, 0);
+        Assert.True(queue.TryTakeMouseReport(out var nextHost));
+        Assert.Equal(MouseButtons.Right, nextHost.Buttons);
+        Assert.Equal((-5, 2, 0), (nextHost.Dx, nextHost.Dy, nextHost.Wheel));
+    }
+
+    [Fact]
+    public void Mouse_motion_remains_coalesced_between_target_changes()
+    {
+        var queue = new CaptureSession.ReportQueue();
+        queue.EnqueueMouse(MouseButtons.Left, 4, 5, 1);
+        queue.EnqueueMouse(MouseButtons.Left, 6, -2, -1);
+
+        Assert.False(queue.TryDequeue(out _));
+        Assert.True(queue.HasMouseReport);
+        Assert.True(queue.TryTakeMouseReport(out var mouse));
+        Assert.Equal(MouseButtons.Left, mouse.Buttons);
+        Assert.Equal((10, 3, 0), (mouse.Dx, mouse.Dy, mouse.Wheel));
+        Assert.False(queue.HasMouseReport);
+    }
+
+    [Fact]
+    public void New_mouse_input_cannot_overtake_a_queued_target_change()
+    {
+        var queue = new CaptureSession.ReportQueue();
+        queue.EnqueueMouse(MouseButtons.None, 10, 0, 0);
+        queue.EnqueueTargetChange(CaptureSession.Queued.SwitchHost);
+        queue.EnqueueMouse(MouseButtons.Right, 20, 0, 0);
+
+        Assert.True(queue.HasMouseReport);
+        Assert.False(queue.TryTakeMouseReport(out _));
+        Assert.True(queue.TryDequeue(out var outgoing));
+        Assert.Equal(CaptureSession.Queued.MouseReport, outgoing.Kind);
+        Assert.Equal(10, outgoing.Dx);
+        Assert.False(queue.TryTakeMouseReport(out _));
+        Assert.True(queue.TryDequeue(out var change));
+        Assert.Equal(CaptureSession.Queued.SwitchHost, change.Kind);
+        Assert.True(queue.TryTakeMouseReport(out var incoming));
+        Assert.Equal(MouseButtons.Right, incoming.Buttons);
+        Assert.Equal(20, incoming.Dx);
+    }
+
+    [Theory]
+    [InlineData(MouseButtons.Left)]
+    [InlineData(MouseButtons.Right)]
+    [InlineData(MouseButtons.Middle)]
+    public void Shaking_during_a_remote_drag_orders_the_release_before_switching(MouseButtons button)
+    {
+        using var capture = new InputCapture();
+        var queue = new CaptureSession.ReportQueue();
+        capture.KeyboardReport += queue.EnqueueKeyboard;
+        capture.MouseReport += queue.EnqueueMouse;
+        capture.SwitchHostRequested += () => queue.EnqueueTargetChange(CaptureSession.Queued.SwitchHost);
+        capture.SetSwitchGesture(SwitchGestureOptions.ForTest(true, 80, 3, 800));
+        var now = 1000;
+        capture.SetNow(() => now);
+
+        Assert.True(capture.HandleMouseButtonEvent(button, true));
+        Assert.True(queue.TryTakeMouseReport(out var pressed));
+        Assert.Equal(button, pressed.Buttons);
+
+        foreach (var delta in new[] { 100, -100, 100, -100 })
+        {
+            now += 50;
+            capture.TrackGesture(delta, 0);
+        }
+
+        Assert.True(queue.TryDequeue(out var keyboardRelease));
+        Assert.Equal(CaptureSession.Queued.Report, keyboardRelease.Kind);
+        Assert.True(queue.TryDequeue(out var mouseRelease));
+        Assert.Equal(CaptureSession.Queued.MouseReport, mouseRelease.Kind);
+        Assert.Equal(MouseButtons.None, mouseRelease.Buttons);
+        Assert.True(queue.TryDequeue(out var change));
+        Assert.Equal(CaptureSession.Queued.SwitchHost, change.Kind);
+        Assert.False(queue.TryTakeMouseReport(out _));
     }
 }

@@ -7,6 +7,8 @@ namespace BleHid.App.Views;
 
 public partial class SettingsPage : Page
 {
+    private SwitchGestureWatcher? _gestureWatcher;
+
     public SettingsPage()
     {
         InitializeComponent();
@@ -19,6 +21,34 @@ public partial class SettingsPage : Page
 
         SwitchGestureToggle.IsChecked =
             SwitchGestureOptions.Load(AppPaths.SwitchGestureConfig).Enabled;
+        Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
+    }
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        if (_gestureWatcher is not null) return;
+        _gestureWatcher = new SwitchGestureWatcher(AppPaths.SwitchGestureConfig);
+        _gestureWatcher.Changed += OnGestureSettingsChanged;
+        RefreshGestureToggle();
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        var watcher = _gestureWatcher;
+        _gestureWatcher = null;
+        if (watcher is null) return;
+        watcher.Changed -= OnGestureSettingsChanged;
+        watcher.Dispose();
+    }
+
+    private void OnGestureSettingsChanged(SwitchGestureOptions options) =>
+        Dispatcher.BeginInvoke(RefreshGestureToggle);
+
+    private void RefreshGestureToggle()
+    {
+        if (_gestureWatcher is { } watcher)
+            SwitchGestureToggle.IsChecked = watcher.Current.Enabled;
     }
 
     private void OnAutoStartChanged(object sender, RoutedEventArgs e) =>
