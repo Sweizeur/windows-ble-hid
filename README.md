@@ -1,4 +1,4 @@
-# BleHid
+# BleHid: Bluetooth Keyboard and Mouse Sharing for Windows
 
 <img src="src/BleHid.App/Assets/blehid.png" alt="BleHid icon" width="104" align="right">
 
@@ -41,16 +41,28 @@ Implementation constraints, packet traces, experiments, and falsified hypotheses
 - A Bluetooth radio that supports the **LE peripheral role** — the app reports this at
   startup; if it says `Peripheral=False`, nothing else will work. See [Adapter
   compatibility](#adapter-compatibility) for what has been tested
-- [.NET SDK 8.0](https://dotnet.microsoft.com/download)
+- [.NET SDK 8.0](https://dotnet.microsoft.com/download) **only if building from source**;
+  the prebuilt downloads do not require a separate .NET installation
 
 ---
 
 ## Download
 
-Prebuilt `win-x64` and `win-arm64` executables are attached to each
-[release](../../releases). They are self-contained single files — no .NET runtime needed.
-Unzip and run `BleHid.Cli.exe`. The arm64 build has been verified on a Snapdragon-based
-Surface laptop, including `capture` driving a remote host.
+Download a package from the [latest release](../../releases/latest). Choose `win-x64`
+for Intel/AMD Windows PCs or `win-arm64` for Windows on Arm.
+
+| Interface | Archive | Run |
+| --- | --- | --- |
+| **Desktop app (recommended)** | `BleHid-App-<version>-<rid>.zip` | `BleHid.App.exe` |
+| Command line | `BleHid-Cli-<version>-<rid>.zip` | `BleHid.Cli.exe` |
+
+Both packages are **self-contained**: no .NET runtime or SDK installation is needed to
+run them. For the desktop app, **extract the entire archive and keep the bundled DLLs
+beside `BleHid.App.exe`**; do not copy the executable out on its own. The CLI executable
+is a single portable file.
+
+The arm64 build has been verified on a Snapdragon-based Surface laptop, including
+`capture` driving a remote host.
 
 The binaries are **unsigned**, so SmartScreen will warn on first launch
 (*More info → Run anyway*). Build from source if you would rather not trust them.
@@ -59,23 +71,68 @@ The binaries are **unsigned**, so SmartScreen will warn on first launch
 
 ## Quick start
 
-1. Run `BleHid.Cli.exe`. It publishes the GATT services and starts advertising
-   immediately.
-2. On the device you want to control, pair with the PC from its Bluetooth settings — the
+### Desktop app (recommended)
+
+1. Extract the desktop archive and run `BleHid.App.exe`.
+2. Open **Status** and click **Start** if the peripheral is not already running.
+3. On the device you want to control, pair with the PC from its Bluetooth settings. The
    PC appears under its own hostname. A Windows host lists the same machine twice; pick the
    entry shown as a **PC**, not the audio one, or the bond lands on Classic and nothing
    works ([details](#a-windows-host-can-pair-to-the-wrong-entry)).
+4. Open **Capture**, wait for the paired device to appear under **Send input to**, and
+  select it. Turn on **Capture keyboard and mouse** to redirect your input to that device.
+
+### Command line
+
+Run only one front end at a time. Before starting the CLI, choose **Exit** from the desktop
+app's notification-area menu; closing its window may only hide it.
+
+1. Extract the CLI archive and run `BleHid.Cli.exe`. It publishes the GATT services and
+  starts advertising immediately.
+2. Pair with the PC from the target device's Bluetooth settings, using the input-device
+  entry rather than the audio one on Windows as described above.
 3. Type **`capture`** and press Enter.
 
-`capture` is the command you actually use. Your real keyboard and mouse now drive the
-paired device instead of this PC.
+### Capture shortcuts
+
+While driving a host, your real keyboard and mouse go to that device instead of this PC.
+The same shortcuts work in the desktop app and interactive CLI:
 
 | While capturing | |
 | --- | --- |
 | `Ctrl` + `Alt` + `Q` | Stop and return control to this PC |
 | `Ctrl` + `Alt` + `CapsLock` or `Ctrl` + `D` + `C` | Switch which device you are driving, including back to this PC |
 
-Everything else in the app is either scripted input (`type`, `move`) or diagnostics.
+The CLI also offers scripted input (`type`, `move`) and diagnostics.
+
+---
+
+## Frequently asked questions
+
+### Does BleHid need Wi-Fi or an internet connection?
+
+No, not for keyboard and mouse input. Once installed and paired, BleHid sends input
+directly over Bluetooth Low Energy. The devices do not need Wi-Fi, a shared local network,
+or an internet connection to exchange input.
+
+### Do I need to install an app on the receiving device?
+
+No. Compatible receiving devices use their built-in Bluetooth HID support, just as they
+would with an ordinary Bluetooth keyboard and mouse. The optional
+[Android companion](#android-companion-experimental) adds connection monitoring and
+diagnostics; it is not required to receive input and is not a guaranteed reconnect fix.
+
+### Which devices can I control with my Windows keyboard and mouse?
+
+BleHid runs on the Windows PC supplying the input. Tested receiving devices include
+Android 16 phones, macOS, Windows 11, and iPhones. On iPhone, mouse input needs
+**AssistiveTouch** enabled.
+
+Compatibility is not universal: input failed on the tested Android 11 phone, the tested
+Samsung TV could not pair, and iPadOS and Linux remain untested. Android and Windows hosts
+also have known reconnect limitations after BleHid restarts. See the
+[host compatibility table](#host-compatibility) and [known issues](#known-issues) before
+choosing a setup.
 
 ---
 
@@ -177,18 +234,30 @@ GATT service. Run `--stop` first when you need the diagnostics.
 
 ## Build and run
 
+Building from source requires the [.NET SDK 8.0](https://dotnet.microsoft.com/download).
+It is not needed for the prebuilt packages above.
+
+Desktop app:
+
+```powershell
+dotnet build src\BleHid.App\BleHid.App.csproj
+dotnet run   --project src\BleHid.App\BleHid.App.csproj
+```
+
+Command line:
+
 ```powershell
 dotnet build src\BleHid.Cli\BleHid.Cli.csproj
 dotnet run   --project src\BleHid.Cli\BleHid.Cli.csproj
 ```
 
-Then follow the Quick start above.
+Run one front end at a time, then follow its [quick start](#quick-start) above.
 
-Run with `--plain` to drop the encryption requirement on the HID characteristics. HOGP
+Run the CLI with `--plain` to drop the encryption requirement on the HID characteristics. HOGP
 mandates encryption, so this is a diagnostic aid rather than a normal mode.
 
-**Note:** the app holds a lock on its own assemblies while running. You must `quit` before
-rebuilding, or the build fails with `MSB3026`.
+**Note:** a running app locks its assemblies. Choose **Exit** from the desktop app's
+notification-area menu, or type `quit` in the CLI, before rebuilding to avoid `MSB3026`.
 
 ---
 
