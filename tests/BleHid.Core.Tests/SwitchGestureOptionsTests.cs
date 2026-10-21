@@ -163,7 +163,18 @@ public sealed class SwitchGestureOptionsTests
         }
         finally
         {
-            File.Delete(path);
+            for (var attempt = 0; attempt < 20; attempt++)
+            {
+                try
+                {
+                    File.Delete(path);
+                    break;
+                }
+                catch (IOException) when (attempt < 19)
+                {
+                    Thread.Sleep(50);
+                }
+            }
         }
     }
 

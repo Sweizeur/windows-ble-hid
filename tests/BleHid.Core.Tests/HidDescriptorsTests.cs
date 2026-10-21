@@ -93,7 +93,6 @@ public class HidDescriptorsTests
     [Fact]
     public void Mouse_descriptor_logical_range_matches_the_clamp_in_code()
     {
-        // 0x16 0x01 0x80 = -32767, 0x26 0xFF 0x7F = 32767.
         var map = HidDescriptors.ReportMapValue;
         Assert.True(IndexOfTriple(map, 0x16, 0x01, 0x80) >= 0, "logical minimum -32767 missing");
         Assert.True(IndexOfTriple(map, 0x26, 0xFF, 0x7F) >= 0, "logical maximum 32767 missing");

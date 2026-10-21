@@ -30,6 +30,7 @@ public sealed class InputCapture : IDisposable
     private readonly HashSet<byte> _pressedUsages = [];
     private readonly HashSet<int> _pressedVirtualKeys = [];
     private readonly HashSet<int> _localPressedVirtualKeys = [];
+    private readonly Dictionary<int, byte> _layoutUsagesByVirtualKey = [];
     private LowLevelProc? _keyboardProc;
     private LowLevelProc? _mouseProc;
     private WinEventProc? _winEventProc;
@@ -313,6 +314,7 @@ public sealed class InputCapture : IDisposable
         if (isDown && virtualKey == 0x51 && IsDown(0x11) && IsDown(0x12)) // Ctrl+Alt+Q
         {
             _pressedUsages.Clear();
+            _layoutUsagesByVirtualKey.Clear();
             _pressedVirtualKeys.Clear();
             KeyboardReport?.Invoke(KeyModifiers.None, []);
             StopRequested?.Invoke();
@@ -338,7 +340,8 @@ public sealed class InputCapture : IDisposable
             return false;
         }
 
-        if (VirtualKeyMap.TryGetUsage(virtualKey, scanCode, extended, out var usage))
+        if (TryApplyLayoutKey(virtualKey, scanCode, extended, isDown, out var usage)
+            || VirtualKeyMap.TryGetUsage(virtualKey, scanCode, extended, out usage))
         {
             if (isDown) _pressedUsages.Add(usage);
             else _pressedUsages.Remove(usage);
@@ -353,12 +356,26 @@ public sealed class InputCapture : IDisposable
         return !releaseLocally;
     }
 
+    private bool TryApplyLayoutKey(int virtualKey, uint scanCode, bool extended, bool isDown, out byte usage)
+    {
+        usage = 0;
+        if (!isDown)
+            return _layoutUsagesByVirtualKey.Remove(virtualKey, out usage);
+
+        if (!KeyboardLayoutMapper.TryGetHidUsage(virtualKey, scanCode, extended, _pressedVirtualKeys, out usage))
+            return false;
+
+        _layoutUsagesByVirtualKey[virtualKey] = usage;
+        return true;
+    }
+
     private void RequestHostSwitch()
     {
         // Release everything held before the target changes. These reports are queued ahead of
         // the switch, so the outgoing host sees the release instead of being left with a key or
         // a mouse button stuck down.
         _pressedUsages.Clear();
+        _layoutUsagesByVirtualKey.Clear();
         KeyboardReport?.Invoke(KeyModifiers.None, []);
         if (_buttons != MouseButtons.None)
         {

@@ -10,6 +10,20 @@ public sealed class InputCaptureTests
     private const int LeftAlt = 0xA4;
 
     [Fact]
+    public void Layout_aware_keys_emit_usages_from_the_physical_scan_code()
+    {
+        using var capture = new InputCapture();
+        var reports = new List<byte[]>();
+        capture.KeyboardReport += (_, usages) => reports.Add(usages.ToArray());
+
+        Assert.True(capture.HandleKeyboardEvent(0x5A, true, 0x11, extended: false));
+        Assert.Equal(new byte[] { 0x1A }, reports[0]);
+
+        Assert.True(capture.HandleKeyboardEvent(0x5A, false, 0x11, extended: false));
+        Assert.Empty(reports[1]);
+    }
+
+    [Fact]
     public void Hook_timing_separates_event_age_from_callback_duration()
     {
         var timing = new InputCapture.HookTiming();
