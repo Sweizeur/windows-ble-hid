@@ -262,6 +262,8 @@ public static class CaptureSession
             log($"  keyboard layout: {KeyboardLayoutMapper.ActiveLayoutName}");
             if (peripheral.SubscribedMouseClients == 0)
                 log("  [warn] no mouse subscriber on the host — pointer reports are dropped until the device enables mouse input (forget/re-pair if it stays at 0)");
+            else
+                log("  [hint] on iPhone, enable Settings → Accessibility → Touch → AssistiveTouch for the pointer");
             log($"  sending to: {peripheral.SelectedHostDisplay}");
             log("  Ctrl+Alt+CapsLock or Ctrl+D+C switches target.");
             log(stopEndsSession

@@ -3,20 +3,15 @@ using System.Runtime.InteropServices;
 namespace BleHid.Core;
 
 /// <summary>
-/// Maps keystrokes using the active Windows keyboard layout so the remote receives the same
-/// characters this PC would type, instead of treating virtual-key letters as US QWERTY positions.
+/// Resolves captured keys to HID usages using the physical scan code from the hook, so the
+/// remote host applies its own layout (AZERTY iPhone matches AZERTY PC key caps).
 /// </summary>
 public static class KeyboardLayoutMapper
 {
-    private const uint MapvkVkToVsc = 0;
-
-    /// <summary>Test hook: replaces Win32 layout translation.</summary>
-    internal static Func<int, uint, bool, byte[], IntPtr, char?>? TranslateHook { get; set; }
-
     /// <summary>Active input locale for the current thread (matches what desktop apps use).</summary>
     public static IntPtr ActiveLayout => GetKeyboardLayout(0);
 
-    /// <summary>Two-letter ISO language name of the active layout, e.g. "fr" or "en".</summary>
+    /// <summary>Display name of the active layout, e.g. fr-FR.</summary>
     public static string ActiveLayoutName
     {
         get
@@ -25,7 +20,7 @@ public static class KeyboardLayoutMapper
             if (layout == IntPtr.Zero) return "unknown";
             var id = unchecked((int)layout.ToInt64());
             var primary = id & 0xFFFF;
-            var lang = primary switch
+            return primary switch
             {
                 0x0409 => "en-US",
                 0x040C => "fr-FR",
@@ -38,12 +33,11 @@ public static class KeyboardLayoutMapper
                 0x0411 => "ja-JP",
                 _ => $"0x{primary:X4}"
             };
-            return lang;
         }
     }
 
     /// <summary>
-    /// True when the key should be resolved through the layout (character) rather than virtual-key position.
+    /// True when the key should be resolved from its physical scan code rather than virtual-key letter positions.
     /// </summary>
     public static bool ShouldTranslate(int virtualKey, IReadOnlyCollection<int> pressedVirtualKeys)
     {
@@ -60,9 +54,7 @@ public static class KeyboardLayoutMapper
         };
     }
 
-    /// <summary>
-    /// Resolves a key press to a HID usage that types the same character on a US QWERTY host.
-    /// </summary>
+    /// <summary>Maps a hooked key to the HID usage for its physical scan code.</summary>
     public static bool TryGetHidUsage(
         int virtualKey,
         uint scanCode,
@@ -73,46 +65,11 @@ public static class KeyboardLayoutMapper
         usage = 0;
         if (!ShouldTranslate(virtualKey, pressedVirtualKeys)) return false;
 
-        var state = new byte[256];
-        foreach (var vk in pressedVirtualKeys)
-        {
-            if (vk is >= 0 and <= 255) state[vk] = 0x80;
-        }
+        if (ScanCodeMap.TryGetUsage(scanCode, extended, out usage)) return true;
 
-        var scan = scanCode | (extended ? 0xE000u : 0u);
-        var layout = ActiveLayout;
-
-        char ch;
-        if (TranslateHook is { } hook)
-        {
-            var translated = hook(virtualKey, scan, extended, state, layout);
-            if (translated is null) return false;
-            ch = translated.Value;
-        }
-        else
-        {
-            var length = ToUnicodeEx((uint)virtualKey, scan, state, _charBuffer, _charBuffer.Length, 0, layout);
-            if (length != 1) return false;
-            ch = _charBuffer[0];
-        }
-
-        if (ch < ' ') return false;
-
-        return HidReports.TryMapChar(ch, out usage, out _);
+        return VirtualKeyMap.TryGetUsage(virtualKey, scanCode, extended, out usage);
     }
-
-    private static readonly char[] _charBuffer = new char[4];
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetKeyboardLayout(uint idThread);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int ToUnicodeEx(
-        uint wVk,
-        uint wScan,
-        byte[] lpKeyState,
-        [Out] char[] pwszBuff,
-        int cchBuff,
-        uint wFlags,
-        IntPtr dwhkl);
 }

@@ -43,7 +43,7 @@ public enum LockKeys : byte
 public static class HidReports
 {
     public const int KeyboardReportLength = 8;
-    public const int MouseReportLength    = 4;
+    public const int MouseReportLength    = 6;
     public static byte[] Keyboard(KeyModifiers modifiers, params byte[] usages)
     {
         var report = new byte[KeyboardReportLength];
@@ -58,11 +58,13 @@ public static class HidReports
 
     public static byte[] Mouse(MouseButtons buttons, int dx, int dy, int wheel)
     {
+        var x = (short)Math.Clamp(dx, -32767, 32767);
+        var y = (short)Math.Clamp(dy, -32767, 32767);
         return
         [
             (byte)buttons,
-            unchecked((byte)(sbyte)Math.Clamp(dx, -127, 127)),
-            unchecked((byte)(sbyte)Math.Clamp(dy, -127, 127)),
+            (byte)(x & 0xFF), (byte)((x >> 8) & 0xFF),
+            (byte)(y & 0xFF), (byte)((y >> 8) & 0xFF),
             unchecked((byte)(sbyte)Math.Clamp(wheel, -127, 127))
         ];
     }
