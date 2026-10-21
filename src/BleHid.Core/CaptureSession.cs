@@ -259,6 +259,9 @@ public static class CaptureSession
         try
         {
             log($"  pointer report interval: {PointerIntervalMs()} ms");
+            log($"  keyboard layout: {KeyboardLayoutMapper.ActiveLayoutName}");
+            if (peripheral.SubscribedMouseClients == 0)
+                log("  [warn] no mouse subscriber on the host — pointer reports are dropped until the device enables mouse input (forget/re-pair if it stays at 0)");
             log($"  sending to: {peripheral.SelectedHostDisplay}");
             log("  Ctrl+Alt+CapsLock or Ctrl+D+C switches target.");
             log(stopEndsSession

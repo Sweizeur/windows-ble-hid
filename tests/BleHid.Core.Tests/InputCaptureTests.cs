@@ -10,6 +10,28 @@ public sealed class InputCaptureTests
     private const int LeftAlt = 0xA4;
 
     [Fact]
+    public void Layout_aware_keys_emit_usages_for_the_typed_character_not_virtual_key_position()
+    {
+        KeyboardLayoutMapper.TranslateHook = (vk, _, _, _, _) => vk == 0x51 ? 'a' : null;
+        try
+        {
+            using var capture = new InputCapture();
+            var reports = new List<byte[]>();
+            capture.KeyboardReport += (_, usages) => reports.Add(usages.ToArray());
+
+            Assert.True(capture.HandleKeyboardEvent(0x51, true, 0x10, extended: false));
+            Assert.Equal(new byte[] { 0x04 }, reports[0]);
+
+            Assert.True(capture.HandleKeyboardEvent(0x51, false, 0x10, extended: false));
+            Assert.Empty(reports[1]);
+        }
+        finally
+        {
+            KeyboardLayoutMapper.TranslateHook = null;
+        }
+    }
+
+    [Fact]
     public void Hook_timing_separates_event_age_from_callback_duration()
     {
         var timing = new InputCapture.HookTiming();

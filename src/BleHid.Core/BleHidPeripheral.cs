@@ -42,6 +42,7 @@ public sealed class BleHidPeripheral : IAsyncDisposable
     private GattServiceProvider? _batteryProvider;
     private GattLocalCharacteristic? _keyboardInput;
     private GattLocalCharacteristic? _mouseInput;
+    private AppearanceAdvertiser? _appearanceAdvertiser;
     private byte[] _lastKeyboardReport = new byte[HidReports.KeyboardReportLength];
     private byte[] _lastMouseReport = new byte[HidReports.MouseReportLength];
     private const byte CapsLockUsage = 0x39;
@@ -163,6 +164,8 @@ public sealed class BleHidPeripheral : IAsyncDisposable
 
         _mouseInput = await CreateInputReportAsync("Mouse input report", service,
             HidDescriptors.MouseReportId, () => _lastMouseReport);
+        if (_mouseInput is not null)
+            _mouseInput.SubscribedClientsChanged += OnMouseSubscribersChanged;
 
         await CreateBatteryServiceAsync();
 
@@ -181,6 +184,20 @@ public sealed class BleHidPeripheral : IAsyncDisposable
             == _advertisingStarted.Task;
 
         Record("StartAdvertising", _provider.AdvertisementStatus.ToString(), started);
+
+        _appearanceAdvertiser = new AppearanceAdvertiser();
+        _appearanceAdvertiser.Log += message => Log?.Invoke(message);
+        if (_appearanceAdvertiser.Start(AppearanceAdvertiser.KeyboardAppearance))
+            Record("GAP appearance", "keyboard (HOGP)", true);
+        else
+            Record("GAP appearance", "could not start secondary advertiser", false);
+    }
+
+    private void OnMouseSubscribersChanged(GattLocalCharacteristic sender, object args)
+    {
+        if (CountLiveClients(sender) == 0) return;
+        // Some Android builds only attach the system pointer after the first mouse report.
+        _ = SendMouseAsync(MouseButtons.None, 0, 0, 0);
     }
 
     private void OnAdvertisementStatusChanged(GattServiceProvider sender,
@@ -789,6 +806,8 @@ public sealed class BleHidPeripheral : IAsyncDisposable
         }
         _hostDevices.Clear();
         _connectionIntervalsMs.Clear();
+        _appearanceAdvertiser?.Dispose();
+        _appearanceAdvertiser = null;
         return ValueTask.CompletedTask;
     }
 }

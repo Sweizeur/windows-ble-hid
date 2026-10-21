@@ -81,11 +81,11 @@ public class HidDescriptorsTests
             HidReports.Keyboard(KeyModifiers.None).Length);
     }
 
-    /// <summary>Buttons+padding (8 bits) + X,Y (16 bits each) + wheel (8 bits) = 6 bytes.</summary>
+    /// <summary>Buttons (8 bits) + X,Y (8 bits each) + wheel (8 bits) = 4 bytes.</summary>
     [Fact]
     public void Mouse_report_length_matches_the_descriptor()
     {
-        Assert.Equal(6, HidReports.MouseReportLength);
+        Assert.Equal(4, HidReports.MouseReportLength);
         Assert.Equal(HidReports.MouseReportLength,
             HidReports.Mouse(MouseButtons.None, 0, 0, 0).Length);
     }
@@ -93,14 +93,14 @@ public class HidDescriptorsTests
     [Fact]
     public void Mouse_descriptor_logical_range_matches_the_clamp_in_code()
     {
-        // 0x16 0x01 0x80 = -32767, 0x26 0xFF 0x7F = 32767.
         var map = HidDescriptors.ReportMapValue;
-        Assert.True(IndexOfTriple(map, 0x16, 0x01, 0x80) >= 0, "logical minimum -32767 missing");
-        Assert.True(IndexOfTriple(map, 0x26, 0xFF, 0x7F) >= 0, "logical maximum 32767 missing");
+        Assert.True(IndexOfTriple(map, 0x15, 0x81, 0x00) >= 0 || IndexOfPair(map, 0x15, 0x81) >= 0,
+            "logical minimum -127 missing");
+        Assert.True(IndexOfPair(map, 0x25, 0x7F) >= 0, "logical maximum 127 missing");
 
         var clamped = HidReports.Mouse(MouseButtons.None, int.MaxValue, int.MinValue, 0);
-        Assert.Equal(32767, BitConverter.ToInt16(clamped, 1));
-        Assert.Equal(-32767, BitConverter.ToInt16(clamped, 3));
+        Assert.Equal(127, (sbyte)clamped[1]);
+        Assert.Equal(-127, (sbyte)clamped[2]);
     }
 
     private static int IndexOfPair(byte[] data, byte a, byte b)

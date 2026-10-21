@@ -43,31 +43,30 @@ public class HidReportsTests
     }
 
     [Fact]
-    public void Mouse_report_is_six_bytes()
+    public void Mouse_report_is_four_bytes()
     {
-        Assert.Equal(6, HidReports.Mouse(MouseButtons.None, 0, 0, 0).Length);
+        Assert.Equal(4, HidReports.Mouse(MouseButtons.None, 0, 0, 0).Length);
     }
 
     [Theory]
-    [InlineData(1, 0x01, 0x00)]
-    [InlineData(-1, 0xFF, 0xFF)]
-    [InlineData(300, 0x2C, 0x01)]
-    [InlineData(-300, 0xD4, 0xFE)]
-    public void Mouse_report_encodes_movement_as_little_endian_signed_16_bit(int dx, byte low, byte high)
+    [InlineData(1, 0x01)]
+    [InlineData(-1, 0xFF)]
+    [InlineData(127, 0x7F)]
+    [InlineData(-127, 0x81)]
+    public void Mouse_report_encodes_movement_as_signed_8_bit(int dx, byte encoded)
     {
         var report = HidReports.Mouse(MouseButtons.None, dx, 0, 0);
 
-        Assert.Equal(low, report[1]);
-        Assert.Equal(high, report[2]);
+        Assert.Equal(encoded, report[1]);
     }
 
     [Fact]
-    public void Mouse_report_clamps_movement_to_the_16_bit_range()
+    public void Mouse_report_clamps_movement_to_the_8_bit_range()
     {
         var report = HidReports.Mouse(MouseButtons.None, 999_999, -999_999, 0);
 
-        Assert.Equal(32767, BitConverter.ToInt16(report, 1));
-        Assert.Equal(-32767, BitConverter.ToInt16(report, 3));
+        Assert.Equal(127, (sbyte)report[1]);
+        Assert.Equal(-127, (sbyte)report[2]);
     }
 
     [Theory]
