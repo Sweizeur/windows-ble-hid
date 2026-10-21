@@ -14,6 +14,7 @@ public sealed class AppearanceAdvertiser : IDisposable
     public const ushort MouseAppearance    = 0x03C2;
 
     private BluetoothLEAdvertisementPublisher? _publisher;
+    private BluetoothLEAdvertisementPublisher? _mousePublisher;
 
     public event Action<string>? Log;
 
@@ -24,44 +25,75 @@ public sealed class AppearanceAdvertiser : IDisposable
     {
         try
         {
-            var writer = new DataWriter { ByteOrder = ByteOrder.LittleEndian };
-            writer.WriteUInt16(appearance);
-
-            var advertisement = new BluetoothLEAdvertisement();
-            advertisement.DataSections.Add(new BluetoothLEAdvertisementDataSection
-            {
-                DataType = 0x19, // GAP Appearance
-                Data = writer.DetachBuffer()
-            });
-
-            var uuidWriter = new DataWriter { ByteOrder = ByteOrder.LittleEndian };
-            uuidWriter.WriteUInt16(0x1812);
-            advertisement.DataSections.Add(new BluetoothLEAdvertisementDataSection
-            {
-                DataType = 0x03, // Complete list of 16-bit service UUIDs
-                Data = uuidWriter.DetachBuffer()
-            });
-
-            _publisher = new BluetoothLEAdvertisementPublisher(advertisement);
-            _publisher.StatusChanged += (sender, args) =>
-                Log?.Invoke($"[appr] publisher -> {args.Status} (error: {args.Error})");
+            _publisher = CreatePublisher(appearance);
+            _publisher.StatusChanged += (_, args) =>
+                Log?.Invoke($"[appr] keyboard publisher -> {args.Status} (error: {args.Error})");
 
             _publisher.Start();
-            Log?.Invoke($"[appr] started, status = {_publisher.Status}");
+            Log?.Invoke($"[appr] keyboard appearance started, status = {_publisher.Status}");
             return true;
         }
         catch (Exception ex)
         {
-            Log?.Invoke($"[appr] FAILED: {ex.Message}");
+            Log?.Invoke($"[appr] keyboard appearance FAILED: {ex.Message}");
             _publisher = null;
             return false;
         }
+    }
+
+    /// <summary>
+    /// Some iPhone builds only attach a pointer when the device also advertises as a mouse.
+    /// </summary>
+    public void StartMousePointerAdvertisement()
+    {
+        if (_mousePublisher is not null) return;
+
+        try
+        {
+            _mousePublisher = CreatePublisher(MouseAppearance);
+            _mousePublisher.StatusChanged += (_, args) =>
+                Log?.Invoke($"[appr] mouse publisher -> {args.Status} (error: {args.Error})");
+
+            _mousePublisher.Start();
+            Log?.Invoke($"[appr] mouse appearance started, status = {_mousePublisher.Status}");
+        }
+        catch (Exception ex)
+        {
+            Log?.Invoke($"[appr] mouse appearance skipped: {ex.Message}");
+            _mousePublisher = null;
+        }
+    }
+
+    private static BluetoothLEAdvertisementPublisher CreatePublisher(ushort appearance)
+    {
+        var writer = new DataWriter { ByteOrder = ByteOrder.LittleEndian };
+        writer.WriteUInt16(appearance);
+
+        var advertisement = new BluetoothLEAdvertisement();
+        advertisement.DataSections.Add(new BluetoothLEAdvertisementDataSection
+        {
+            DataType = 0x19, // GAP Appearance
+            Data = writer.DetachBuffer()
+        });
+
+        var uuidWriter = new DataWriter { ByteOrder = ByteOrder.LittleEndian };
+        uuidWriter.WriteUInt16(0x1812);
+        advertisement.DataSections.Add(new BluetoothLEAdvertisementDataSection
+        {
+            DataType = 0x03, // Complete list of 16-bit service UUIDs
+            Data = uuidWriter.DetachBuffer()
+        });
+
+        return new BluetoothLEAdvertisementPublisher(advertisement);
     }
 
     public void Dispose()
     {
         if (_publisher?.Status == BluetoothLEAdvertisementPublisherStatus.Started)
             _publisher.Stop();
+        if (_mousePublisher?.Status == BluetoothLEAdvertisementPublisherStatus.Started)
+            _mousePublisher.Stop();
         _publisher = null;
+        _mousePublisher = null;
     }
 }

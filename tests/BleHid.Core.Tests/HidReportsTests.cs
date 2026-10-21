@@ -48,6 +48,17 @@ public class HidReportsTests
         Assert.Equal(6, HidReports.Mouse(MouseButtons.None, 0, 0, 0).Length);
     }
 
+    [Fact]
+    public void Boot_mouse_report_is_three_bytes_with_signed_deltas()
+    {
+        var report = HidReports.BootMouse(MouseButtons.Left, 5, -3);
+
+        Assert.Equal(3, report.Length);
+        Assert.Equal((byte)MouseButtons.Left, report[0]);
+        Assert.Equal(5, (sbyte)report[1]);
+        Assert.Equal(-3, (sbyte)report[2]);
+    }
+
     [Theory]
     [InlineData(1, 0x01, 0x00)]
     [InlineData(-1, 0xFF, 0xFF)]

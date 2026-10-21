@@ -36,15 +36,18 @@ public sealed class BleHidPeripheral : IAsyncDisposable
     private string? _selectedHostId;
     private bool _localOnly;
     private bool _warnedMissingHost;
+    private bool _warnedNoMouseSubscribers;
     private bool _everAdvertised;
     private TaskCompletionSource<bool>? _advertisingStarted;
     private GattServiceProvider? _provider;
     private GattServiceProvider? _batteryProvider;
     private GattLocalCharacteristic? _keyboardInput;
     private GattLocalCharacteristic? _mouseInput;
+    private GattLocalCharacteristic? _bootMouseInput;
     private AppearanceAdvertiser? _appearanceAdvertiser;
     private byte[] _lastKeyboardReport = new byte[HidReports.KeyboardReportLength];
     private byte[] _lastMouseReport = new byte[HidReports.MouseReportLength];
+    private byte[] _lastBootMouseReport = new byte[HidReports.BootMouseReportLength];
     private const byte CapsLockUsage = 0x39;
     private const byte NumLockUsage = 0x53;
     // Keypad / through Keypad . - the keys whose meaning Num Lock actually changes.
@@ -62,7 +65,7 @@ public sealed class BleHidPeripheral : IAsyncDisposable
         _provider?.AdvertisementStatus ?? GattServiceProviderAdvertisementStatus.Created;
 
     public int SubscribedKeyboardClients => CountLiveClients(_keyboardInput);
-    public int SubscribedMouseClients => CountLiveClients(_mouseInput);
+    public int SubscribedMouseClients => CountLiveMouseSubscribers();
 
     // WinRT keeps a bonded host's CCCD entry in SubscribedClients after the ACL drops, so a
     // subscriber only counts while the device it belongs to has not been seen disconnecting.
@@ -73,12 +76,23 @@ public sealed class BleHidPeripheral : IAsyncDisposable
     private int CountLiveClients(GattLocalCharacteristic? characteristic) =>
         characteristic?.SubscribedClients.Count(client => IsLiveHost(client.Session.DeviceId.Id)) ?? 0;
 
+    private int CountLiveMouseSubscribers()
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var client in _mouseInput?.SubscribedClients ?? [])
+            if (IsLiveHost(client.Session.DeviceId.Id)) ids.Add(client.Session.DeviceId.Id);
+        foreach (var client in _bootMouseInput?.SubscribedClients ?? [])
+            if (IsLiveHost(client.Session.DeviceId.Id)) ids.Add(client.Session.DeviceId.Id);
+        return ids.Count;
+    }
+
     public int MouseReportIntervalMs(int configuredIntervalMs)
     {
         if (_pointerPacing.Warning is { } warning && Interlocked.Exchange(ref _pacingWarningLogged, 1) == 0)
             Log?.Invoke($"[link] {warning}");
 
-        var clients = _mouseInput?.SubscribedClients ?? [];
+        var clients = (_mouseInput?.SubscribedClients ?? [])
+            .Concat(_bootMouseInput?.SubscribedClients ?? []);
         return clients
             .Where(client => _selectedHostId is null || string.Equals(
                 client.Session.DeviceId.Id, _selectedHostId, StringComparison.OrdinalIgnoreCase))
@@ -164,8 +178,11 @@ public sealed class BleHidPeripheral : IAsyncDisposable
 
         _mouseInput = await CreateInputReportAsync("Mouse input report", service,
             HidDescriptors.MouseReportId, () => _lastMouseReport);
+        _bootMouseInput = await CreateBootMouseInputAsync(service, () => _lastBootMouseReport);
         if (_mouseInput is not null)
             _mouseInput.SubscribedClientsChanged += OnMouseSubscribersChanged;
+        if (_bootMouseInput is not null)
+            _bootMouseInput.SubscribedClientsChanged += OnMouseSubscribersChanged;
 
         await CreateBatteryServiceAsync();
 
@@ -191,12 +208,15 @@ public sealed class BleHidPeripheral : IAsyncDisposable
             Record("GAP appearance", "keyboard (HOGP)", true);
         else
             Record("GAP appearance", "could not start secondary advertiser", false);
+
+        _appearanceAdvertiser.StartMousePointerAdvertisement();
     }
 
     private void OnMouseSubscribersChanged(GattLocalCharacteristic sender, object args)
     {
         if (CountLiveClients(sender) == 0) return;
-        // Some Android builds only attach the system pointer after the first mouse report.
+        _warnedNoMouseSubscribers = false;
+        // Some hosts only attach the system pointer after the first mouse report.
         _ = SendMouseAsync(MouseButtons.None, 0, 0, 0);
     }
 
@@ -438,6 +458,40 @@ public sealed class BleHidPeripheral : IAsyncDisposable
         return characteristic;
     }
 
+    private async Task<GattLocalCharacteristic?> CreateBootMouseInputAsync(
+        GattLocalService service, Func<byte[]> currentValue)
+    {
+        var parameters = new GattLocalCharacteristicParameters
+        {
+            CharacteristicProperties = GattCharacteristicProperties.Read |
+                                       GattCharacteristicProperties.Notify,
+            ReadProtectionLevel = _protection
+        };
+
+        var result = await service.CreateCharacteristicAsync(HidDescriptors.BootMouseInput, parameters);
+        Record("Boot Mouse input report", result.Error.ToString(), result.Error == BluetoothError.Success);
+        if (result.Error != BluetoothError.Success) return null;
+
+        var characteristic = result.Characteristic;
+
+        characteristic.ReadRequested += async (_, args) =>
+        {
+            using var deferral = args.GetDeferral();
+            var request = await args.GetRequestAsync();
+            Log?.Invoke("[read] host read Boot Mouse input report");
+            request.RespondWithValue(CryptographicBuffer.CreateFromByteArray(currentValue()));
+        };
+
+        characteristic.SubscribedClientsChanged += (sender, _) =>
+        {
+            Log?.Invoke($"[subs] Boot Mouse input report: {sender.SubscribedClients.Count} subscriber(s)");
+            ReturnLocalIfTargetUnavailable();
+            _ = RefreshConnectionParametersAsync();
+        };
+
+        return characteristic;
+    }
+
     private async Task RefreshConnectionParametersAsync()
     {
         await _connectionParameterGate.WaitAsync();
@@ -638,7 +692,21 @@ public sealed class BleHidPeripheral : IAsyncDisposable
     public Task SendMouseAsync(MouseButtons buttons, int dx, int dy, int wheel)
     {
         _lastMouseReport = HidReports.Mouse(buttons, dx, dy, wheel);
-        return NotifyAsync(_mouseInput, _lastMouseReport);
+        _lastBootMouseReport = HidReports.BootMouse(buttons, dx, dy);
+
+        if (CountLiveMouseSubscribers() == 0)
+        {
+            if (!_warnedNoMouseSubscribers)
+            {
+                _warnedNoMouseSubscribers = true;
+                Log?.Invoke("[mouse] no host subscribed to mouse or boot-mouse reports — pointer data is not sent (re-pair after updating BleHid)");
+            }
+            return Task.CompletedTask;
+        }
+
+        return Task.WhenAll(
+            NotifyAsync(_mouseInput, _lastMouseReport),
+            NotifyAsync(_bootMouseInput, _lastBootMouseReport));
     }
 
     /// <summary>Subscribed hosts, de-duplicated across the keyboard and mouse reports.</summary>
@@ -647,6 +715,7 @@ public sealed class BleHidPeripheral : IAsyncDisposable
         var ids = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var client in _keyboardInput?.SubscribedClients ?? []) ids.Add(client.Session.DeviceId.Id);
         foreach (var client in _mouseInput?.SubscribedClients ?? []) ids.Add(client.Session.DeviceId.Id);
+        foreach (var client in _bootMouseInput?.SubscribedClients ?? []) ids.Add(client.Session.DeviceId.Id);
         ids.RemoveWhere(id => !IsLiveHost(id));
 
         return ids.Select(id => new HostTarget(id, ShortAddress(id), _hostNames.GetValueOrDefault(id))).ToList();

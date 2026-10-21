@@ -261,9 +261,9 @@ public static class CaptureSession
             log($"  pointer report interval: {PointerIntervalMs()} ms");
             log($"  keyboard layout: {KeyboardLayoutMapper.ActiveLayoutName}");
             if (peripheral.SubscribedMouseClients == 0)
-                log("  [warn] no mouse subscriber on the host — pointer reports are dropped until the device enables mouse input (forget/re-pair if it stays at 0)");
+                log("  [warn] no mouse subscriber on the host — forget/re-pair the PC on the iPhone after updating BleHid, then check Status → Mouse subscribers");
             else
-                log("  [hint] on iPhone, enable Settings → Accessibility → Touch → AssistiveTouch for the pointer");
+                log("  [hint] iPhone: Settings → Accessibility → Touch → AssistiveTouch ON, then move the pointer on the home screen before opening Moonlight");
             log($"  sending to: {peripheral.SelectedHostDisplay}");
             log("  Ctrl+Alt+CapsLock or Ctrl+D+C switches target.");
             log(stopEndsSession

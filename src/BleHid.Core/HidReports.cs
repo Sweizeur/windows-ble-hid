@@ -44,6 +44,7 @@ public static class HidReports
 {
     public const int KeyboardReportLength = 8;
     public const int MouseReportLength    = 6;
+    public const int BootMouseReportLength = 3;
     public static byte[] Keyboard(KeyModifiers modifiers, params byte[] usages)
     {
         var report = new byte[KeyboardReportLength];
@@ -68,6 +69,14 @@ public static class HidReports
             unchecked((byte)(sbyte)Math.Clamp(wheel, -127, 127))
         ];
     }
+
+    /// <summary>Boot protocol mouse report (buttons + 8-bit dx/dy). Used by several iOS builds.</summary>
+    public static byte[] BootMouse(MouseButtons buttons, int dx, int dy) =>
+    [
+        (byte)buttons,
+        unchecked((byte)(sbyte)Math.Clamp(dx, -127, 127)),
+        unchecked((byte)(sbyte)Math.Clamp(dy, -127, 127))
+    ];
 
     /// <summary>Maps a printable ASCII character to its HID usage ID and required modifiers.</summary>
     public static bool TryMapChar(char c, out byte usage, out KeyModifiers modifiers)

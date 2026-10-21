@@ -11,6 +11,7 @@ public static class HidDescriptors
     public static readonly Guid HidControlPoint   = Uuid16(0x2A4C);
     public static readonly Guid Report            = Uuid16(0x2A4D);
     public static readonly Guid ProtocolMode      = Uuid16(0x2A4E);
+    public static readonly Guid BootMouseInput    = Uuid16(0x2A33);
     public static readonly Guid ReportReference   = Uuid16(0x2908);
     public static readonly Guid BatteryService    = Uuid16(0x180F);
     public static readonly Guid BatteryLevel      = Uuid16(0x2A19);
