@@ -78,7 +78,7 @@ public class HidReportsTests
     {
         var report = HidReports.Mouse(MouseButtons.None, 0, 0, wheel);
 
-        Assert.Equal(expected, (sbyte)report[5]);
+        Assert.Equal(expected, (sbyte)report[3]);
     }
 
     [Fact]

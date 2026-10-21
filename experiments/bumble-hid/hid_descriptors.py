@@ -16,7 +16,7 @@ PROTOCOL_MODE_REPORT = 0x01
 HID_INFORMATION = bytes([0x11, 0x01, 0x00, 0x03])
 
 KEYBOARD_REPORT_LENGTH = 8
-MOUSE_REPORT_LENGTH = 6
+MOUSE_REPORT_LENGTH = 4
 
 REPORT_MAP = bytes(
     [
@@ -97,16 +97,14 @@ def keyboard_release() -> bytes:
 
 
 def mouse_report(buttons: int = 0, dx: int = 0, dy: int = 0, wheel: int = 0) -> bytes:
-    x = max(-32767, min(32767, dx))
-    y = max(-32767, min(32767, dy))
+    x = max(-127, min(127, dx))
+    y = max(-127, min(127, dy))
     w = max(-127, min(127, wheel))
     return bytes(
         [
             buttons & 0xFF,
             x & 0xFF,
-            (x >> 8) & 0xFF,
             y & 0xFF,
-            (y >> 8) & 0xFF,
             w & 0xFF,
         ]
     )
